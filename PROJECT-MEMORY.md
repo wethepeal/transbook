@@ -215,6 +215,8 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | D-027 | 2026-09-17 | ⚡ **本地模型实测完成**：llama.cpp **Vulkan** build（引擎 86 MB，比 CUDA 包省 20 倍带宽）+ Qwen3-8B-Q5_K_M；全 GPU 卸载 **32.2 tok/s 生成 / 1049.7 t/s 提示处理**，纯 CPU 仅 5.31 tok/s（**GPU 快 6.1 倍**）；`-ngl 16` 部分卸载 10.18 tok/s（14B 降级路线） | M0 实测 #3/#4 | 整本本地翻译约 **1~1.5 小时**（原估 6~20 小时）；模型与引擎均在 Z 盘 |
 | D-028 | 2026-09-17 | 🧠 **翻译必须关闭思考模式**：Qwen3 默认把 token 全花在推理上，实测 content **返回空字符串** → 本地引擎默认传 `chat_template_kwargs.enable_thinking=false` | M0 实测踩坑（llama-server 输出为空） | 已固化到 `tp translate --engine local` 与 `tools/local_bench.py`；DeepSeek 侧的关闭参数待接入 `.env` 后实测 |
 | D-029 | 2026-09-17 | ♻️ **审核回流闭环完成**：`export-review`（TSV，只改第 4 列）→ 人工修改 → `apply-review`（按 `seg_id` 回灌）→ 重出终版；另有 `clear-review` 回滚到机翻 | 用户 Q5 要求"先双语审核、通过后出纯中文" | 安全保证：只写 `final_translation`、回灌前自动备份、留空视为不改、未知 ID 只报告。真实样书验证：3401 行 → 改 5 行 → 回灌（采纳 5/未变 3396）→ **终版 EPUB 确认含人工定稿**；57 测试全绿 |
+| D-030 | 2026-09-17 | 📕 **PDF 输出完成（Typst）**：A5 单栏、2em 缩进、1.85 行距、思源宋体正文/黑体标题、每章另起、**自动目录**、页脚页码；双语模式原文灰色小字在上 | 用户需求"EPUB **或** PDF"——此前只有 EPUB | 真实样书：**纯中文 351 页/9.45 MB**、双语 11.5 MB（13 章/3388 段/12 图）；肉眼核验版式正确、标点无悬挂；`tp render --to epub\|pdf\|both`。依赖 +typst 0.15.0、+pypdfium2、dev +pillow；68 测试全绿 |
+| D-031 | 2026-09-17 | 🔁 **跨格式链路验证**：审核回灌的定稿同时出现在 EPUB 与 PDF 成品中（PDF 第 3 页可见 `【人工定稿#2】`） | 证明"IR 单一真源 + 两个渲染适配器"的架构成立 | 提交 `f87f6e3` |
 
 ---
 
@@ -233,7 +235,7 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | M1 真实翻译验收（DeepSeek 真跑一遍并出双语 EPUB） | ⏳ 等 `.env` |
 | M2 抽取质量（脚注/表格、竖排 PDF 列序重排、EPUB 前后附页归类） | ⬜ 未开始 |
 | M3 翻译质量与成本（术语表落地、滚动摘要、本地模型对比） | ⬜ 未开始 |
-| M4 输出完善（EPUB3 校验、Typst PDF 排版、审核回流 export/apply-review） | ⬜ 未开始 |
+| M4 输出完善（EPUB3 校验、Typst PDF 排版、审核回流 export/apply-review） | 🚧 **大部分完成**：EPUB3 + **PDF(Typst)** + 审核回流均可用；剩封面页与 epubcheck 校验 |
 | M5 服务化（FastAPI + 任务队列 + SSE 进度） | ⬜ 未开始 |
 | M6 Web GUI（项目管理 / 段落级对照校对 / 导出） | ⬜ 未开始 |
 
