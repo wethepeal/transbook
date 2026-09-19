@@ -369,5 +369,85 @@ def render(
                       f"先跑 `tp translate` 可补齐[/yellow]")
 
 
+@app.command("export-review")
+def export_review_cmd(
+    target: Path = typer.Argument(Path("data/work/re0-v43"), help="工作目录或 .db 路径"),
+    fmt: str = typer.Option("tsv", "--format", "-f", help="tsv（可编辑，用于回灌）｜ md（只读通读）"),
+    out: Path | None = typer.Option(None, "--out", "-o", help="输出路径"),
+    only_translated: bool = typer.Option(False, "--only-translated", help="只导出已有译文的段落"),
+) -> None:
+    """⑦a 导出校对文件：改完译文后用 `tp apply-review` 回灌。"""
+    from transbook.review import export_markdown, export_tsv
+    from transbook.store import connect
+
+    db_path = _resolve_db(target)
+    if not db_path.is_file():
+        console.print(f"[red]找不到数据库：{db_path}[/red]")
+        raise typer.Exit(1)
+    work = target if target.is_dir() else target.parent
+    if fmt == "tsv":
+        path = out or (work / "review.tsv")
+        n = export_tsv(connect(db_path), path, only_translated=only_translated)
+    elif fmt == "md":
+        path = out or (work / "review.md")
+        n = export_markdown(connect(db_path), path, only_translated=only_translated)
+    else:
+        console.print(f"[red]未知格式：{fmt}（可选 tsv / md）[/red]")
+        raise typer.Exit(2)
+    console.print(f"[green]✓[/green] 导出 {n} 段 → {path}")
+    if fmt == "tsv":
+        console.print("  只改第 4 列（translation），然后："
+                      f"[bold]tp apply-review {work} {path.name}[/bold]")
+
+
+@app.command("apply-review")
+def apply_review_cmd(
+    target: Path = typer.Argument(..., help="工作目录或 .db 路径"),
+    file: Path = typer.Argument(..., help="校对文件（TSV）"),
+    no_backup: bool = typer.Option(False, "--no-backup", help="不回灌前备份数据库（不建议）"),
+) -> None:
+    """⑦b 回灌校对结果：只写被修改过的行，定稿写入 `final_translation`（不覆盖机翻）。"""
+    from transbook.review import apply_tsv
+    from transbook.store import connect
+
+    db_path = _resolve_db(target)
+    if not db_path.is_file():
+        console.print(f"[red]找不到数据库：{db_path}[/red]")
+        raise typer.Exit(1)
+    conn = connect(db_path)
+    try:
+        st = apply_tsv(conn, file, db_path=db_path, backup=not no_backup)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    finally:
+        conn.close()
+    console.print(f"[green]✓[/green] 回灌完成：{st.summary()}")
+
+
+@app.command("clear-review")
+def clear_review_cmd(
+    target: Path = typer.Argument(..., help="工作目录或 .db 路径"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="确认执行"),
+) -> None:
+    """回滚：清空人工定稿，回到机翻状态（单段级回滚手段）。"""
+    from transbook.review import clear_final
+    from transbook.store import connect
+
+    db_path = _resolve_db(target)
+    if not db_path.is_file():
+        console.print(f"[red]找不到数据库：{db_path}[/red]")
+        raise typer.Exit(1)
+    if not yes:
+        console.print("[yellow]这会清空所有人工定稿（机翻保留）。确认请加 --yes[/yellow]")
+        raise typer.Exit(1)
+    conn = connect(db_path)
+    try:
+        n = clear_final(conn)
+    finally:
+        conn.close()
+    console.print(f"[green]✓[/green] 已清空 {n} 段定稿，回到机翻状态")
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
