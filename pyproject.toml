@@ -11,6 +11,8 @@ dependencies = [
     "lxml>=5.3",
     "beautifulsoup4>=4.12",
     "rich>=13.9",
+    "typst>=0.15.0",
+    "pypdfium2>=5.13.0",
 ]
 
 [project.scripts]
@@ -18,6 +20,7 @@ tp = "transbook.cli:app"
 
 [dependency-groups]
 dev = [
+    "pillow>=12.3.0",
     "pytest>=8.3",
     "ruff>=0.7",
 ]

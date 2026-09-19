@@ -322,15 +322,20 @@ def translate(
 def render(
     target: Path = typer.Argument(Path("data/work/re0-v43"), help="工作目录（含 book.ir.json 与 translations.db）"),
     mode: str = typer.Option("bilingual", "--mode", "-m", help="bilingual（对照，供审核）｜ zh（纯中文终版）"),
-    out: Path | None = typer.Option(None, "--out", "-o", help="输出 .epub 路径"),
+    to: str = typer.Option("epub", "--to", help="epub ｜ pdf ｜ both"),
+    out_dir: Path | None = typer.Option(None, "--out", "-o", help="输出目录（默认工作目录）"),
 ) -> None:
-    """⑥ 渲染：IR + 译文 → EPUB（双语对照 / 纯中文）。"""
+    """⑥ 渲染：IR + 译文 → EPUB / PDF（双语对照 / 纯中文）。"""
     from transbook.ir import DocumentIR
-    from transbook.render import CSS, build_chapters, build_nav, write_epub
+    from transbook.render import CSS, build_chapters, build_nav, render_pdf, write_epub
     from transbook.store import connect
 
     if mode not in ("bilingual", "zh"):
         console.print(f"[red]未知模式：{mode}（可选 bilingual / zh）[/red]")
+        raise typer.Exit(2)
+    wants = {"epub": ("epub",), "pdf": ("pdf",), "both": ("epub", "pdf")}.get(to)
+    if wants is None:
+        console.print(f"[red]未知输出：{to}（可选 epub / pdf / both）[/red]")
         raise typer.Exit(2)
 
     work = target if target.is_dir() else target.parent
@@ -351,19 +356,34 @@ def render(
         conn.close()
     translations = {r["block_id"]: r["t"] for r in rows}
 
-    chapters = build_chapters(ir, translations, mode=mode)
-    nav = build_nav(chapters)
-    out_path = out or (work / f"{ir.doc.id}.{mode}.epub")
-    write_epub(out_path, title=ir.doc.title, author=ir.doc.author,
-               language="zh", chapters=chapters, css=CSS, nav=nav,
-               images_dir=work / "assets", identifier=f"urn:transbook:{ir.doc.id}:{mode}")
-
     translatable = len(ir.translatable())
     covered = sum(1 for b in ir.translatable() if translations.get(b.id))
-    size_mb = out_path.stat().st_size / 1024 / 1024
-    console.print(f"[green]✓[/green] 已生成 {mode} 版 EPUB：{out_path}")
-    console.print(f"  章节 {len(chapters)} ｜ 段落覆盖 {covered}/{translatable}"
-                  f"（{covered / max(translatable, 1) * 100:.1f}%）｜ 体积 {size_mb:.2f} MB")
+    dest = Path(out_dir) if out_dir else work
+    dest.mkdir(parents=True, exist_ok=True)
+
+    if "epub" in wants:
+        chapters = build_chapters(ir, translations, mode=mode)
+        nav = build_nav(chapters)
+        epub_path = dest / f"{ir.doc.id}.{mode}.epub"
+        write_epub(epub_path, title=ir.doc.title, author=ir.doc.author, language="zh",
+                   chapters=chapters, css=CSS, nav=nav,
+                   images_dir=work / "assets",
+                   identifier=f"urn:transbook:{ir.doc.id}:{mode}")
+        console.print(f"[green]✓[/green] EPUB({mode})：{epub_path} "
+                      f"｜ {len(chapters)} 章 ｜ {epub_path.stat().st_size / 1024 / 1024:.2f} MB")
+
+    if "pdf" in wants:
+        res = render_pdf(work, ir, translations, mode=mode)
+        if res.error or res.pdf_path is None:
+            console.print(f"[red]✗ PDF 渲染失败：{res.error}[/red]")
+            console.print(f"  Typst 源码已生成，可人工检查：{res.typ_path}")
+        else:
+            console.print(f"[green]✓[/green] PDF({mode})：{res.pdf_path} "
+                          f"｜ {res.chapters} 章 / {res.paragraphs} 段 / {res.images} 图 "
+                          f"｜ {res.pdf_path.stat().st_size / 1024:.0f} KB")
+
+    console.print(f"  段落覆盖 {covered}/{translatable}"
+                  f"（{covered / max(translatable, 1) * 100:.1f}%）")
     if covered < translatable:
         console.print(f"  [yellow]提示：还有 {translatable - covered} 段没有译文，"
                       f"先跑 `tp translate` 可补齐[/yellow]")
