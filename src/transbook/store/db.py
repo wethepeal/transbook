@@ -1,0 +1,276 @@
+"""SQLite 存储层：段落表 = 翻译 / 审核 / 断点续跑 / 回滚 的核心。
+
+设计要点（对应 `docs/plan.md` §5.2）：
+
+* **`seg_id` 可读且确定**：`{doc_id}:{block_id}`。同一份 IR 反复导入得到同一批 ID，
+  因此审核回灌（TSV 里的 seg_id）与断点续跑都靠它对齐。
+* **`text_hash` 是 TM 键**：内容寻址。即使将来抽取逻辑变化导致 `block_id` 漂移，
+  也能凭 `text_hash` 把旧译文迁移过来（`carry_over_translations`）。
+* **`translation` 永不覆盖**（机翻留痕），审核定稿写 `final_translation`，渲染时优先取定稿。
+* **成本字段随段落记录**，便于按章/按引擎核算，并支撑 `--max-cost` 硬护栏。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+from transbook.ir import DocumentIR
+from transbook.textutil import normalize_ws
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS doc (
+    id            TEXT PRIMARY KEY,
+    title         TEXT,
+    author        TEXT,
+    source_lang   TEXT,
+    origin        TEXT,
+    ir_schema     TEXT,
+    block_count   INTEGER,
+    imported_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS segment (
+    seg_id            TEXT PRIMARY KEY,
+    doc_id            TEXT NOT NULL,
+    block_id          TEXT NOT NULL,
+    ord               INTEGER NOT NULL,
+    kind              TEXT NOT NULL,           -- heading / paragraph / footnote
+    source_text       TEXT NOT NULL,
+    text_hash         TEXT NOT NULL,
+    source_lang       TEXT,
+    status            TEXT NOT NULL DEFAULT 'pending',
+    translation       TEXT,                    -- 机翻，永不覆盖
+    final_translation TEXT,                    -- 审核定稿
+    engine            TEXT,
+    model             TEXT,
+    prompt_version    TEXT,
+    glossary_version  TEXT,
+    tokens_in         INTEGER DEFAULT 0,
+    tokens_out        INTEGER DEFAULT 0,
+    cost              REAL DEFAULT 0,
+    attempts          INTEGER DEFAULT 0,
+    last_error        TEXT,
+    updated_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_segment_status ON segment(status);
+CREATE INDEX IF NOT EXISTS idx_segment_hash   ON segment(text_hash);
+CREATE INDEX IF NOT EXISTS idx_segment_doc    ON segment(doc_id, ord);
+
+CREATE TABLE IF NOT EXISTS tm (
+    text_hash    TEXT NOT NULL,
+    source_lang  TEXT NOT NULL,
+    target_lang  TEXT NOT NULL,
+    translation  TEXT NOT NULL,
+    engine       TEXT,
+    model        TEXT,
+    hits         INTEGER DEFAULT 0,
+    updated_at   TEXT,
+    PRIMARY KEY (text_hash, source_lang, target_lang)
+);
+"""
+
+TRANSLATABLE = ("heading", "paragraph", "footnote")
+
+
+def connect(db_path: str | Path) -> sqlite3.Connection:
+    """打开（必要时创建）数据库并应用 schema。"""
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.executescript(SCHEMA)
+    return conn
+
+
+def text_hash_of(text: str) -> str:
+    """TM 键：规范化空白的原文 → sha256 前 24 位。"""
+    return hashlib.sha256(normalize_ws(text).encode("utf-8")).hexdigest()[:24]
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+@dataclass
+class ImportStats:
+    doc_id: str
+    created: int
+    updated: int
+    skipped: int
+    carried: int = 0
+
+    def __str__(self) -> str:
+        return (f"文档 {self.doc_id}：新建 {self.created} ｜ 更新 {self.updated} ｜ "
+                f"跳过 {self.skipped} ｜ 迁移旧译文 {self.carried}")
+
+
+def import_ir(conn: sqlite3.Connection, ir: DocumentIR, target_lang: str = "zh") -> ImportStats:
+    """把 IR 的**可翻译块**导入为段落；已存在的 seg_id 只更新原文相关字段，不动译文。"""
+    doc = ir.doc
+    now = _now()
+    conn.execute(
+        "INSERT INTO doc(id,title,author,source_lang,origin,ir_schema,block_count,imported_at) "
+        "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+        "title=excluded.title, author=excluded.author, source_lang=excluded.source_lang, "
+        "origin=excluded.origin, ir_schema=excluded.ir_schema, block_count=excluded.block_count",
+        (doc.id, doc.title, doc.author, doc.source_lang, doc.origin,
+         ir.schema_version, len(ir.blocks), now),
+    )
+
+    created = updated = skipped = carried = 0
+    order_of: dict[str, int] = {}
+    for idx, block in enumerate(ir.blocks):
+        order_of[block.id] = idx
+
+    for idx, block in enumerate(ir.blocks):
+        if block.type not in TRANSLATABLE or not block.text.strip():
+            skipped += 1
+            continue
+        seg_id = f"{doc.id}:{block.id}"
+        th = text_hash_of(block.text)
+        row = conn.execute("SELECT source_text, status FROM segment WHERE seg_id=?", (seg_id,)).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO segment(seg_id,doc_id,block_id,ord,kind,source_text,text_hash,"
+                "source_lang,status,updated_at) VALUES(?,?,?,?,?,?,?,?, 'pending', ?)",
+                (seg_id, doc.id, block.id, idx, block.type, block.text, th,
+                 doc.source_lang, now),
+            )
+            created += 1
+        else:
+            if normalize_ws(row["source_text"]) != normalize_ws(block.text):
+                conn.execute(
+                    "UPDATE segment SET source_text=?, text_hash=?, ord=?, kind=?, updated_at=? "
+                    "WHERE seg_id=?",
+                    (block.text, th, idx, block.type, now, seg_id),
+                )
+                updated += 1
+            # 原文未变则原样保留（含译文与状态）
+
+    carried = carry_over_translations(conn, doc.id, target_lang)
+    conn.commit()
+    return ImportStats(doc.id, created, updated, skipped, carried)
+
+
+def carry_over_translations(conn: sqlite3.Connection, doc_id: str, target_lang: str = "zh") -> int:
+    """把 TM 里已有的译文回填到本文件的待译段落（内容相同即复用，跨书共享）。
+
+    这是"抽取逻辑改变后译文不丢"的保险，也是第二本书省钱的来源。
+    """
+    rows = conn.execute(
+        "SELECT s.seg_id, s.text_hash, s.source_lang FROM segment s "
+        "LEFT JOIN tm ON tm.text_hash = s.text_hash AND tm.source_lang = s.source_lang "
+        "                 AND tm.target_lang = ? "
+        "WHERE s.doc_id = ? AND s.status = 'pending' AND tm.translation IS NOT NULL",
+        (target_lang, doc_id),
+    ).fetchall()
+    n = 0
+    for r in rows:
+        tm = conn.execute(
+            "SELECT translation, engine, model FROM tm WHERE text_hash=? AND source_lang=? AND target_lang=?",
+            (r["text_hash"], r["source_lang"] or "", target_lang),
+        ).fetchone()
+        if not tm:
+            continue
+        conn.execute(
+            "UPDATE segment SET translation=?, engine=?, model=?, status='done', updated_at=? "
+            "WHERE seg_id=?",
+            (tm["translation"], tm["engine"] or "tm", tm["model"], _now(), r["seg_id"]),
+        )
+        conn.execute("UPDATE tm SET hits = hits + 1 WHERE text_hash=? AND source_lang=? AND target_lang=?",
+                     (r["text_hash"], r["source_lang"] or "", target_lang))
+        n += 1
+    return n
+
+
+def stats(conn: sqlite3.Connection) -> dict[str, Any]:
+    """进度与成本统计。"""
+    out: dict[str, Any] = {}
+    out["docs"] = [dict(r) for r in conn.execute("SELECT * FROM doc ORDER BY id")]
+    out["by_status"] = {
+        r["status"]: r["n"] for r in conn.execute(
+            "SELECT status, COUNT(*) AS n FROM segment GROUP BY status ORDER BY n DESC")
+    }
+    row = conn.execute(
+        "SELECT COUNT(*) n, SUM(CASE WHEN translation IS NOT NULL THEN 1 ELSE 0 END) done, "
+        "SUM(CASE WHEN final_translation IS NOT NULL THEN 1 ELSE 0 END) reviewed, "
+        "COALESCE(SUM(cost),0) cost, COALESCE(SUM(tokens_in),0) tin, "
+        "COALESCE(SUM(tokens_out),0) tout FROM segment"
+    ).fetchone()
+    out.update(dict(row))
+    out["tm_entries"] = conn.execute("SELECT COUNT(*) n FROM tm").fetchone()["n"]
+    return out
+
+
+def pending(conn: sqlite3.Connection, limit: int | None = None) -> list[sqlite3.Row]:
+    """取待译段落（按原文顺序）。"""
+    sql = ("SELECT * FROM segment WHERE status IN ('pending','failed') "
+           "ORDER BY doc_id, ord" + (f" LIMIT {int(limit)}" if limit else ""))
+    return list(conn.execute(sql))
+
+
+def record_translation(conn: sqlite3.Connection, seg_id: str, translation: str, *,
+                       engine: str = "", model: str = "", prompt_version: str = "",
+                       glossary_version: str = "", tokens_in: int = 0, tokens_out: int = 0,
+                       cost: float = 0.0, target_lang: str = "zh",
+                       write_tm: bool = True) -> None:
+    """写入一条机翻结果，并（可选）写入 TM。**不覆盖 final_translation**。"""
+    now = _now()
+    conn.execute(
+        "UPDATE segment SET translation=?, status='done', engine=?, model=?, prompt_version=?, "
+        "glossary_version=?, tokens_in=?, tokens_out=?, cost=?, attempts=attempts+1, "
+        "last_error=NULL, updated_at=? WHERE seg_id=?",
+        (translation, engine, model, prompt_version, glossary_version,
+         tokens_in, tokens_out, cost, now, seg_id),
+    )
+    if write_tm and translation:
+        row = conn.execute("SELECT text_hash, source_lang FROM segment WHERE seg_id=?", (seg_id,)).fetchone()
+        if row:
+            conn.execute(
+                "INSERT INTO tm(text_hash,source_lang,target_lang,translation,engine,model,hits,updated_at) "
+                "VALUES(?,?,?,?,?,?,0,?) ON CONFLICT(text_hash,source_lang,target_lang) DO UPDATE SET "
+                "translation=excluded.translation, engine=excluded.engine, model=excluded.model, "
+                "updated_at=excluded.updated_at",
+                (row["text_hash"], row["source_lang"] or "", target_lang, translation,
+                 engine, model, now),
+            )
+    conn.commit()
+
+
+def record_failure(conn: sqlite3.Connection, seg_id: str, error: str) -> None:
+    conn.execute(
+        "UPDATE segment SET status='failed', attempts=attempts+1, last_error=?, updated_at=? "
+        "WHERE seg_id=?",
+        (error[:500], _now(), seg_id),
+    )
+    conn.commit()
+
+
+def effective_text(seg: sqlite3.Row | dict[str, Any]) -> str:
+    """渲染用译文：审核定稿优先，其次机翻。"""
+    d = dict(seg)
+    return d.get("final_translation") or d.get("translation") or ""
+
+
+def dump_segments(conn: sqlite3.Connection, doc_id: str | None = None) -> list[dict[str, Any]]:
+    """导出段落（调试/测试用）。"""
+    sql = "SELECT * FROM segment"
+    args: Iterable[Any] = ()
+    if doc_id:
+        sql += " WHERE doc_id=?"
+        args = (doc_id,)
+    sql += " ORDER BY doc_id, ord"
+    return [dict(r) for r in conn.execute(sql, args)]
+
+
+def to_json(obj: Any) -> str:  # pragma: no cover - 便捷调试
+    return json.dumps(obj, ensure_ascii=False, indent=2)

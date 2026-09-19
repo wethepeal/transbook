@@ -26,6 +26,16 @@ XHTML_TYPES = ("application/xhtml+xml", "text/html")
 _IMG_EXT = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
 _VERTICAL = re.compile(r"writing-mode\s*:\s*vertical|vertical-rl|vertical-lr", re.I)
 _HEAD_CLASS = re.compile(r"bold|mfont|font-1[0-9]{2}per|title|heading|midashi", re.I)
+_SLUG_KEEP = re.compile(r"[^0-9A-Za-z\u3040-\u30ff\u4e00-\u9fff]+")
+
+
+def slugify(text: str, maxlen: int = 28) -> str:
+    """把书名/文件名压成可读且短的 ID（会进入 seg_id，故必须简洁）。
+
+    例：`Re：ゼロから始める異世界生活 43 (MF文庫J)` → `Re-ゼロから始める異世界生活-43`
+    """
+    s = _SLUG_KEEP.sub("-", (text or "").strip()).strip("-")
+    return (s[:maxlen].rstrip("-") or "book")
 
 
 class EpubError(RuntimeError):
@@ -81,9 +91,11 @@ def _spans_of(el: Any) -> list[InlineSpan]:
 class EpubIngestor:
     """把一个 EPUB 文件解析成 DocumentIR。"""
 
-    def __init__(self, path: str | Path, assets_subdir: str = "assets") -> None:
+    def __init__(self, path: str | Path, assets_subdir: str = "assets",
+                 doc_id: str | None = None) -> None:
         self.path = Path(path)
         self.assets_subdir = assets_subdir
+        self.doc_id = doc_id
         self._block_seq = 0
         self._ruby_dropped = 0
         self._images: dict[str, Path] = {}
@@ -231,7 +243,7 @@ class EpubIngestor:
 
             return DocumentIR(
                 doc=DocMeta(
-                    id=self.path.stem[:60],
+                    id=self.doc_id or slugify(meta.get("title") or self.path.stem),
                     title=meta.get("title", ""),
                     author=meta.get("creator", ""),
                     publisher=meta.get("publisher", ""),

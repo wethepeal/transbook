@@ -112,6 +112,7 @@ def extract(
     out: Path = typer.Option(Path("data/work/book"), "--out", "-o", help="输出目录"),
     limit: int | None = typer.Option(None, "--limit", help="预览只输出前 N 个块"),
     no_assets: bool = typer.Option(False, "--no-assets", help="不提取图片"),
+    doc_id: str | None = typer.Option(None, "--doc-id", help="文档 ID（默认由书名生成短标识）"),
 ) -> None:
     """① 抽取：EPUB → DocumentIR(JSON) + Markdown 预览（人工检查闸门）。"""
     from transbook.ingest import EpubError, EpubIngestor
@@ -123,7 +124,7 @@ def extract(
 
     out.mkdir(parents=True, exist_ok=True)
     try:
-        ing = EpubIngestor(source)
+        ing = EpubIngestor(source, doc_id=doc_id)
         ir = ing.extract(assets_dir=None if no_assets else out / "assets")
     except EpubError as exc:
         console.print(f"[red]抽取失败：{exc}[/red]")
@@ -157,6 +158,72 @@ def preview(
         raise typer.Exit(1)
     ir = DocumentIR.model_validate(json.loads(path.read_text(encoding="utf-8")))
     console.print(to_markdown(ir, limit=None if full else limit))
+
+
+def _resolve_db(target: Path) -> Path:
+    """接受目录或直接的 .db 路径，统一解析为数据库文件路径。"""
+    if target.is_dir():
+        return target / "translations.db"
+    return target
+
+
+@app.command("import")
+def import_cmd(
+    ir_path: Path = typer.Argument(..., help="book.ir.json 或包含它的目录"),
+    db: Path | None = typer.Option(None, "--db", help="SQLite 路径（默认与 IR 同目录的 translations.db）"),
+    target_lang: str = typer.Option("zh", "--target-lang", help="目标语言"),
+) -> None:
+    """⑤ 入库：IR → SQLite 段落表（稳定 ID + 文本哈希 + TM 复用）。"""
+    from transbook.ir import DocumentIR
+    from transbook.store import connect, import_ir
+
+    path = ir_path / "book.ir.json" if ir_path.is_dir() else ir_path
+    if not path.is_file():
+        console.print(f"[red]找不到 IR：{path}[/red]")
+        raise typer.Exit(1)
+    db_path = db or (path.parent / "translations.db")
+
+    ir = DocumentIR.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    conn = connect(db_path)
+    try:
+        st = import_ir(conn, ir, target_lang=target_lang)
+    finally:
+        conn.close()
+    console.print(f"[green]✓[/green] 入库完成：{st}")
+    console.print(f"  数据库: {db_path}")
+
+
+@app.command()
+def status(
+    target: Path = typer.Argument(Path("data/work/re0-v43"), help="工作目录或 .db 路径"),
+) -> None:
+    """查看翻译进度与成本。"""
+    from transbook.store import connect, stats
+
+    db_path = _resolve_db(target)
+    if not db_path.is_file():
+        console.print(f"[red]找不到数据库：{db_path}[/red]")
+        raise typer.Exit(1)
+    conn = connect(db_path)
+    try:
+        s = stats(conn)
+    finally:
+        conn.close()
+
+    table = Table(title=f"翻译进度 · {db_path.name}", title_justify="left", expand=False)
+    table.add_column("项", style="cyan", width=12)
+    table.add_column("值", overflow="ellipsis", max_width=96)
+    for d in s["docs"]:
+        table.add_row(f"文档", f"{d['id']} ｜ {d['title'] or '(无标题)'} ｜ {d['source_lang']} ｜ "
+                               f"{d['block_count']} 块")
+    table.add_row("段落总数", str(s["n"]))
+    table.add_row("已机翻", f"{s['done']}（{s['done'] / max(s['n'], 1) * 100:.1f}%）")
+    table.add_row("已审核定稿", str(s["reviewed"]))
+    table.add_row("状态分布", " ｜ ".join(f"{k} {v}" for k, v in s["by_status"].items()) or "—")
+    table.add_row("Token", f"输入 {s['tin']:,} ｜ 输出 {s['tout']:,}")
+    table.add_row("累计成本", f"[yellow]¥{s['cost']:.4f}[/yellow]")
+    table.add_row("TM 条目", str(s["tm_entries"]))
+    console.print(table)
 
 
 if __name__ == "__main__":  # pragma: no cover

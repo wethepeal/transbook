@@ -206,6 +206,8 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | D-018 | 2026-09-17 | 🖨️ **PDF 引擎改为 Typst**（备选 WeasyPrint 排除）：WeasyPrint 在本机 Windows 报 `libgobject-2.0-0` 缺失（需 GTK/Pango）；Typst 1.23 s 出 A5 PDF，文字抽取 5/5，渲染图人眼确认禁则/缩进/页码正确 | M0 实测 #5 | **架构影响**：内容真源由 XHTML 上提为 **IR**（EPUB→XHTML、PDF→Typst 两个适配器）；字体用本机 **Noto Serif SC / Noto Sans SC**（已装，无需下载） |
 | D-019 | 2026-09-17 | 🌐 **网络实测**：HuggingFace 官方站不可达；**hf-mirror 首字节慢且会停滞** → 改用 **ModelScope**（模型）+ **gh-proxy/ghfast 代理**（GitHub 发布物），并加"断点续传 + 卡死重试"循环 | M0 实测 | 模型权重落 `Z:\AgentHub\models\gguf`；运行时选 **llama.cpp Vulkan 构建**（30 MB，远小于 CUDA 包 615 MB） |
 | D-020 | 2026-09-17 | 🧲 **PDF 抽取定为 pypdfium2 单引擎**：质量与 PyMuPDF **完全等同**（156,881 字符）但**快 3 倍**、许可宽松，且**能直读书签**（12 条，与 EPUB NAV 对应）；**pdfminer.six 淘汰**（本书为 **Type3 字体**，只抽出 3%） | M0 实测 #6（373 页真实日文 PDF） | PDF 与 EPUB **共用同一「目录→章节」结构模型**；竖排 PDF 列序重排仍待验证（该样书是横排） |
+| D-021 | 2026-09-17 | 🧱 **结构还原采用三层兜底**：① NAV 锚点 + NAV 标题（主路径）② NAV 无标题 → 用正文标题文本回填 ③ 无锚点 → 类名启发式（`bold/mfont/font-1xxper/title/heading`） | 真实样书里「あとがき」页的 **NAV 标题为空**，仅靠主路径会产出空标题目录项 | 已实现于 `src/transbook/ingest/epub.py`；实测 13 条目录**全部有标题** |
+| D-022 | 2026-09-17 | 🧪 **M1 前三步完成**：IR 模型 + EPUB 抽取器 + Markdown 预览闸门，配 15 个自包含测试（代码生成最小 EPUB，不依赖用户文件） | 计划书 §14.7 第 2~4 步 | 真实样书验证：3413 块（标题 13/段落 3388/图片 12）、剥离注音 1977、提取 22 图；提交 `18cfd37` |
 
 ---
 
@@ -314,3 +316,4 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | 2026-09-17 | 答复 Q14~Q22；**实测样书**（结构/字数/竖排/ruby/成本）；计划书升 **v1.0** 并新增 §14 实施·调试·回滚策略；新增 D-013~D-016 与风险 #9~#11 | agent |
 | 2026-09-17 | **M0 开工**：uv 0.12.17 + venv + git + CLI 落地（`tp --version`/`doctor` 通过）；NAV 结构算法实测 100% 命中（D-017）；PDF 引擎选定 Typst（D-018）；网络结论（D-019）。产出 `docs/m0-report.md` 与 6 个调研/基准工具 | agent |
 | 2026-09-17 | M0 实测 #6 完成：**pypdfium2 定为 PDF 单引擎**（等同 PyMuPDF、快 3 倍、可读书签），pdfminer 因 Type3 字体淘汰（D-020）；模型与引擎下载改用 ModelScope/gh-proxy 并加断点续传重试 | agent |
+| 2026-09-17 | **M1 前三步完成**（D-022）：IR 模型 + EPUB 抽取器（三层兜底结构策略 D-021）+ Markdown 预览闸门 + 15 个测试；真实样书结构还原 13/13 条目录有标题。M0 剩余：#3/#4 本地吞吐（模型下载中）、#7 API 成本（等用户 `.env`） | agent |
