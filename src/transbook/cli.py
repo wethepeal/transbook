@@ -1,11 +1,15 @@
 """transbook 命令行入口。
 
-M0 阶段只提供两个自检命令；随里程碑推进逐步加入
-`extract` / `preview` / `translate` / `export-review` / `apply-review` / `render` / `status` / `retry`。
+M0/M1 阶段命令：
+  tp version / tp doctor        环境自检
+  tp extract <book.epub> -o DIR  抽取为 DocumentIR + Markdown 预览
+  tp preview <DIR|book.ir.json>  查看已抽取的结构
+随里程碑推进逐步加入 translate / export-review / apply-review / render / status / retry。
 """
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
@@ -100,6 +104,59 @@ def doctor() -> None:
             table.add_row(f"{drive}: 磁盘", f"[red]{exc}[/red]")
 
     console.print(table)
+
+
+@app.command()
+def extract(
+    source: Path = typer.Argument(..., help="输入的 EPUB 文件（PDF 支持在 M2 加入）"),
+    out: Path = typer.Option(Path("data/work/book"), "--out", "-o", help="输出目录"),
+    limit: int | None = typer.Option(None, "--limit", help="预览只输出前 N 个块"),
+    no_assets: bool = typer.Option(False, "--no-assets", help="不提取图片"),
+) -> None:
+    """① 抽取：EPUB → DocumentIR(JSON) + Markdown 预览（人工检查闸门）。"""
+    from transbook.ingest import EpubError, EpubIngestor
+    from transbook.ingest.preview import summarize, to_markdown
+
+    if not source.is_file():
+        console.print(f"[red]文件不存在：{source}[/red]")
+        raise typer.Exit(1)
+
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        ing = EpubIngestor(source)
+        ir = ing.extract(assets_dir=None if no_assets else out / "assets")
+    except EpubError as exc:
+        console.print(f"[red]抽取失败：{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    ir_path = out / "book.ir.json"
+    ir_path.write_text(ir.model_dump_json(indent=2), encoding="utf-8")
+    md_path = out / "preview.md"
+    md_path.write_text(to_markdown(ir, limit=limit), encoding="utf-8")
+
+    console.print(f"[green]✓[/green] {summarize(ir)}")
+    console.print(f"  IR      : {ir_path}")
+    console.print(f"  预览    : {md_path}   ← [bold]请先看这份再翻译[/bold]")
+    if ir.doc.vertical:
+        console.print("  [yellow]提示：检测到竖排样式（输出将按中文横排排版）[/yellow]")
+
+
+@app.command()
+def preview(
+    target: Path = typer.Argument(..., help="IR 文件或包含 book.ir.json 的目录"),
+    limit: int = typer.Option(60, "--limit", "-n", help="输出前 N 个块"),
+    full: bool = typer.Option(False, "--full", help="输出全部块"),
+) -> None:
+    """查看已抽取的结构（Markdown）。"""
+    from transbook.ingest.preview import to_markdown
+    from transbook.ir import DocumentIR
+
+    path = target / "book.ir.json" if target.is_dir() else target
+    if not path.is_file():
+        console.print(f"[red]找不到 IR：{path}[/red]")
+        raise typer.Exit(1)
+    ir = DocumentIR.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    console.print(to_markdown(ir, limit=None if full else limit))
 
 
 if __name__ == "__main__":  # pragma: no cover
