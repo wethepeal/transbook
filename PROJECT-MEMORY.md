@@ -204,7 +204,8 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | D-016 | 2026-09-17 | 💰 **成本远低于预算**：按官方现价 + 样书规模，单本约 **¥0.5（flash）/ ¥2（v4-pro）**，而预算上限是 ¥20~30 | 实测规模 + 官方定价页 | 可直接用更强模型；仍上 `--max-cost` 硬护栏；**测试阶段目标花费≈0 元** |
 | D-017 | 2026-09-17 | ✅ **结构还原算法确定（零启发式）**：NAV 目录给出 `(标题, 文件#锚点)`，正文里 `id=锚点` 的元素即章节标题块；**`<rt>` 注音必须剥离**（否则逐字注音的标题与 NAV 对不上） | M0 实测：两本样书 22 条目录中，带锚点的 **16/16 = 100%** 定位成功；剥离 rt 后标题 **16/16 完全一致** | 已写入 `tools/nav_anchor_check.py`；M1 直接复用 |
 | D-018 | 2026-09-17 | 🖨️ **PDF 引擎改为 Typst**（备选 WeasyPrint 排除）：WeasyPrint 在本机 Windows 报 `libgobject-2.0-0` 缺失（需 GTK/Pango）；Typst 1.23 s 出 A5 PDF，文字抽取 5/5，渲染图人眼确认禁则/缩进/页码正确 | M0 实测 #5 | **架构影响**：内容真源由 XHTML 上提为 **IR**（EPUB→XHTML、PDF→Typst 两个适配器）；字体用本机 **Noto Serif SC / Noto Sans SC**（已装，无需下载） |
-| D-019 | 2026-09-17 | 🌐 **网络实测**：HuggingFace 官方站不可达 → 统一走 **`hf-mirror.com`**（`HF_ENDPOINT` 已固化）；本地运行时选 **llama.cpp**（比 Ollama 小，且 `-ngl`/`--n-cpu-moe` 便于测 14B 部分卸载） | M0 实测 | 模型权重落 `Z:\AgentHub\models\gguf` |
+| D-019 | 2026-09-17 | 🌐 **网络实测**：HuggingFace 官方站不可达；**hf-mirror 首字节慢且会停滞** → 改用 **ModelScope**（模型）+ **gh-proxy/ghfast 代理**（GitHub 发布物），并加"断点续传 + 卡死重试"循环 | M0 实测 | 模型权重落 `Z:\AgentHub\models\gguf`；运行时选 **llama.cpp Vulkan 构建**（30 MB，远小于 CUDA 包 615 MB） |
+| D-020 | 2026-09-17 | 🧲 **PDF 抽取定为 pypdfium2 单引擎**：质量与 PyMuPDF **完全等同**（156,881 字符）但**快 3 倍**、许可宽松，且**能直读书签**（12 条，与 EPUB NAV 对应）；**pdfminer.six 淘汰**（本书为 **Type3 字体**，只抽出 3%） | M0 实测 #6（373 页真实日文 PDF） | PDF 与 EPUB **共用同一「目录→章节」结构模型**；竖排 PDF 列序重排仍待验证（该样书是横排） |
 
 ---
 
@@ -312,3 +313,4 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | 2026-09-17 | 用户答复 6 项关键决策；计划书升为 v0.2（`docs/plan.md`，旧 v0.1 已删）；新增 D-007~D-012；确定三方目录约定；识别本地模型 AWQ/显存两处硬冲突 | agent |
 | 2026-09-17 | 答复 Q14~Q22；**实测样书**（结构/字数/竖排/ruby/成本）；计划书升 **v1.0** 并新增 §14 实施·调试·回滚策略；新增 D-013~D-016 与风险 #9~#11 | agent |
 | 2026-09-17 | **M0 开工**：uv 0.12.17 + venv + git + CLI 落地（`tp --version`/`doctor` 通过）；NAV 结构算法实测 100% 命中（D-017）；PDF 引擎选定 Typst（D-018）；网络结论（D-019）。产出 `docs/m0-report.md` 与 6 个调研/基准工具 | agent |
+| 2026-09-17 | M0 实测 #6 完成：**pypdfium2 定为 PDF 单引擎**（等同 PyMuPDF、快 3 倍、可读书签），pdfminer 因 Type3 字体淘汰（D-020）；模型与引擎下载改用 ModelScope/gh-proxy 并加断点续传重试 | agent |

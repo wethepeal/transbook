@@ -339,7 +339,10 @@ Z:\_cache\                           # 各类缓存
 4. Qwen3-14B GGUF 部分卸载的可行性与实际速度（决定开关 B 是否值得留）。
 5. ~~WeasyPrint 中文排版实测~~ ✅ **已完成**：WeasyPrint 在 Windows **失败**（缺 `libgobject-2.0-0`/GTK）；
    **Typst 通过**（1.23 s 出 A5 PDF、文字抽取 5/5、渲染图人眼确认禁则与缩进、字体用本机 Noto Serif/Sans SC）。
-6. pypdfium2 / pdfminer.six 在文字版 PDF 上的抽取质量与速度（PyMuPDF 作对照）。
+6. ~~pypdfium2 / pdfminer.six 抽取对比~~ ✅ **已完成**（见 `docs/m0-report.md` §5）：
+   **pypdfium2 与 PyMuPDF 抽取结果完全一致（156,881 字符）但快 3 倍**，且能直读 12 条书签；
+   **pdfminer.six 因 Type3 字体只抽出 3% 被淘汰**。→ PDF 单引擎定为 **pypdfium2**（Apache/BSD）。
+   遗留：**竖排 PDF 列序重排**待真实竖排样例验证（现有样书为横排）。
 7. DeepSeek API 实测：并发限流表现、JSON 输出稳定性、缓存命中率、**单章真实成本**（校准 §9）。
 
 ---
