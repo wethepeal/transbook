@@ -24,6 +24,8 @@ from transbook.ir import DocumentIR
 
 HIRAGANA = re.compile(r"[\u3041-\u309f]")
 KATAKANA = re.compile(r"[\u30a1-\u30f6]")
+#: 假名（平/片）——用于判断"是否真的需要翻译"
+KANA = re.compile(r"[\u3041-\u309f\u30a1-\u30f6]")
 _WS = re.compile(r"[\s\u3000]+")
 
 ERROR, WARN = "error", "warn"
@@ -112,9 +114,12 @@ def check(conn: sqlite3.Connection, ir: DocumentIR | None = None,
                     f"状态 {r['status']}，无译文", WARN if r["status"] == "pending" else ERROR)
             continue
 
-        # ③ 原文泄漏（等于没翻）
+        # ③ 原文泄漏（等于没翻）。
+        #    只对**含假名**的原文报警：纯汉字/符号串（「第七章 『Reweave』」「「────」」）
+        #    译成同样内容是正确的，早期版本会误报 115 条（真实数据驱动修正）。
         if _norm(tgt) == _norm(src):
-            rep.add("source_leak", seg, f"译文与原文相同：{src[:30]!r}")
+            if KANA.search(src):
+                rep.add("source_leak", seg, f"译文与原文相同：{src[:30]!r}")
             continue
 
         # ④ 残留假名

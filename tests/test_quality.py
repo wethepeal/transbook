@@ -144,6 +144,19 @@ def test_extract_filters_common_kanji():
     assert "自分" not in terms and "彼女" not in terms
 
 
+def test_qa_source_leak_needs_kana(tmp_path: Path):
+    """纯汉字/符号串与原文相同是合理的（标题、破折号），不应报错。"""
+    rows = [
+        ("第七章 『Reweave』", "第七章 『Reweave』", "done"),   # 无假名 → 不报
+        ("「────」", "「────」", "done"),                      # 纯符号 → 不报
+        ("レムは笑った。", "レムは笑った。", "done"),            # 含假名 → 报
+    ]
+    conn, ir = _db_with(tmp_path, rows)
+    rep = check(conn, ir)
+    leaks = [i.seg_id for i in rep.issues if i.kind == "source_leak"]
+    assert leaks == ["doc:b000003"]
+
+
 def test_qa_summary_and_strict_semantics(tmp_path: Path):
     conn, ir = _db_with(tmp_path, [("夢を見た。", "夢を見た。", "done")])
     rep = check(conn, ir)

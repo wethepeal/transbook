@@ -284,8 +284,13 @@ def translate(
                 raise typer.Exit(2)
             key = "dry-run-placeholder"  # 干跑不会发请求，允许无密钥预估
         default_model = get("TRANSLATE_MODEL") or ("deepseek-flash" if engine == "deepseek" else "")
-        # 本地 Qwen3 等思考型模型必须关闭思考，否则 token 耗尽且返回空内容（M0 实测）
-        extra = {"chat_template_kwargs": {"enable_thinking": False}} if engine == "local" else {}
+        # 关闭思考模式——两种引擎都需要，原因不同（都是 M0/M1 实测踩过的坑）：
+        #   DeepSeek：思考模式**默认开启**（effort=high），思维链会白花 token 且拖慢；
+        #   本地 Qwen3：不关会耗尽 token 且 content 返回空字符串。
+        if engine == "local":
+            extra = {"chat_template_kwargs": {"enable_thinking": False}}
+        else:
+            extra = {"thinking": {"type": "disabled"}}
         provider = DeepSeekProvider(
             key,
             model=model or default_model or "deepseek-flash",
