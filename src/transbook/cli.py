@@ -469,5 +469,87 @@ def clear_review_cmd(
     console.print(f"[green]✓[/green] 已清空 {n} 段定稿，回到机翻状态")
 
 
+@app.command()
+def terms(
+    target: Path = typer.Argument(Path("data/work/re0-v43"), help="工作目录或 .db 路径"),
+    min_count: int = typer.Option(3, "--min-count", help="候选词最少出现次数"),
+    top: int = typer.Option(400, "--top", help="最多输出多少条候选"),
+    out: Path | None = typer.Option(None, "--out", "-o", help="输出 TSV（默认 <workdir>/terms.candidates.tsv）"),
+    no_kanji: bool = typer.Option(False, "--no-kanji", help="只抽片假名与引号短语（汉字噪声大）"),
+) -> None:
+    """⑧a 术语预扫描：抽候选人名/专有名词 → 你填译法 → 翻译时强制注入。"""
+    from transbook.quality import extract_candidates, write_candidates
+    from transbook.store import connect
+
+    db_path = _resolve_db(target)
+    if not db_path.is_file():
+        console.print(f"[red]找不到数据库：{db_path}[/red]")
+        raise typer.Exit(1)
+    conn = connect(db_path)
+    try:
+        texts = [r["source_text"] for r in
+                 conn.execute("SELECT source_text FROM segment ORDER BY doc_id, ord")]
+    finally:
+        conn.close()
+
+    cands = extract_candidates(texts, min_count=min_count, top=top, include_kanji=not no_kanji)
+    work = target if target.is_dir() else target.parent
+    path = out or (work / "terms.candidates.tsv")
+    write_candidates(path, cands)
+    by_kind: dict[str, int] = {}
+    for c in cands:
+        by_kind[c.kind] = by_kind.get(c.kind, 0) + 1
+    console.print(f"[green]✓[/green] 候选 {len(cands)} 条 → {path}")
+    console.print("  分布：" + " ｜ ".join(f"{k} {v}" for k, v in sorted(by_kind.items())))
+    console.print("  前 8 条：" + "，".join(f"{c.term}({c.count})" for c in cands[:8]))
+    console.print("  填好最后一列后传给："
+                  f"[bold]tp translate {work} --glossary {path.name}[/bold]")
+
+
+@app.command()
+def qa(
+    target: Path = typer.Argument(Path("data/work/re0-v43"), help="工作目录或 .db 路径"),
+    glossary: Path | None = typer.Option(None, "--glossary", help="术语表（用于一致性检查）"),
+    strict: bool = typer.Option(False, "--strict", help="有错误时以非零退出码结束（可进 CI）"),
+    examples: int = typer.Option(8, "--examples", help="每类问题展示几个例子（0=全部）"),
+) -> None:
+    """⑧b 译文 QA：漏译 / 原文残留 / 假名残留 / 术语不一致 / 长度异常。"""
+    from transbook.ir import DocumentIR
+    from transbook.quality import check, load_glossary
+    from transbook.store import connect
+
+    work = target if target.is_dir() else target.parent
+    db_path = _resolve_db(target)
+    if not db_path.is_file():
+        console.print(f"[red]找不到数据库：{db_path}[/red]")
+        raise typer.Exit(1)
+    ir = None
+    ir_path = work / "book.ir.json"
+    if ir_path.is_file():
+        ir = DocumentIR.model_validate(json.loads(ir_path.read_text(encoding="utf-8")))
+    gl = load_glossary(glossary)
+    conn = connect(db_path)
+    try:
+        rep = check(conn, ir, gl)
+    finally:
+        conn.close()
+
+    console.print(f"[bold]QA 报告[/bold] · {rep.summary()}")
+    if gl:
+        console.print(f"  术语表：{len(gl)} 条")
+    shown: dict[str, int] = {}
+    for issue in rep.issues:
+        limit = examples if examples else 10**9
+        if shown.get(issue.kind, 0) >= limit:
+            continue
+        shown[issue.kind] = shown.get(issue.kind, 0) + 1
+        console.print(str(issue))
+    for kind, n in rep.counts().items():
+        if examples and n > examples:
+            console.print(f"  … [{kind}] 另有 {n - examples} 条未显示")
+    if strict and not rep.ok():
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
