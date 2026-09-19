@@ -1,0 +1,128 @@
+# M0 实测报告（进行中）
+
+**日期** 2026-09-17　**状态** 🚧 进行中（环境与结构识别已完成；模型/排版/成本实测进行中）
+**对应计划书** `docs/plan.md` §8（M0）与 §12（七项实测）
+
+---
+
+## 1. 环境落地（✅ 完成）
+
+| 项 | 结果 |
+|---|---|
+| uv | **0.12.17**，装于 `Z:\Python\Python_3_12_1\Scripts\uv.exe`（走 PyPI；该 Python 无 pip，已用 `ensurepip` 自举） |
+| 项目 venv | `Z:\AgentProjectHub\Translation_Engineering\.venv`（**55 MB，1550 文件**，在 Z 盘） |
+| 依赖锁定 | `uv.lock` ✅（pydantic 2.13.5 / typer 0.27.2 / httpx / lxml / bs4 / rich 15.0.0；dev: pytest 9.1.1 / ruff 0.16.8） |
+| CLI | `tp --version` / `tp version` / `tp -V` / `tp doctor` 均可用 ✅ |
+| git | 仓库已初始化（`git init`），身份取自全局配置 |
+| 缓存落盘 | `UV_CACHE_DIR=Z:\_cache\uv`，**C 盘无 uv 缓存** ✅ |
+| 目录 | `Z:\Tools`、`Z:\AgentHub\{models,engines,serve}` 已建立 |
+
+环境变量（用户级，已固化）：`UV_CACHE_DIR`、`HF_HOME`、`TORCH_HOME`、`OLLAMA_MODELS`、`HF_ENDPOINT=https://hf-mirror.com`；PATH 追加 Python Scripts。
+
+### ⚠️ 开发摩擦（须知）
+沙箱是 `workspace-write`，因此**我执行 `uv sync` / 写 `Z:\_cache` 必须申请提权**。
+你本人直接在终端跑则无此限制。若想让我零摩擦开发，可把 uv 缓存改为工作区内路径——但会偏离"缓存统一放 `Z:\_cache`"的约定，暂不改。
+
+### 网络实测（重要）
+| 目标 | 结果 |
+|---|---|
+| HuggingFace 官方 `huggingface.co` | ❌ **不可达** |
+| **`hf-mirror.com`** | ✅ 可用（已列出国 `Qwen3-8B-GGUF` 的 5 个量化：Q4_K_M / Q5_0 / Q5_K_M / Q6_K / Q8_0） |
+| GitHub API / releases | ✅ 可用（llama.cpp `b11053` 有 13 个 Windows 资产） |
+| DeepSeek API 端点 | ✅ 可达（harness 在用） |
+| `ollama.com` | ✅ 可达（安装包 1.5 GB） |
+
+→ **结论**：模型下载走 **hf-mirror**；本地运行时选 **llama.cpp**（比 Ollama 小得多，且 `-ngl`/`--n-cpu-moe` 正是测 14B 部分卸载所需）。
+
+---
+
+## 2. 实测 #2：NAV 结构识别原型（✅ 完成，最高优先级）
+
+背景：样书 `<h1>`~`<h6>` 计数为 **0**，原以为要靠字体/类名启发式。
+
+### 实测结论（两本样书共 22 条目录）
+
+1. **章节与文件一一对应**：每个 `p-00N.xhtml` 就是一章；NAV 给出 `(标题, 文件#锚点)`。
+2. **章节标题 = `p.bold.mfont.font-110per`，其 `id` 恰是 NAV 的锚点**（如 `#toc-002`）。
+3. 逐条验证结果：
+
+| 指标 | 43 卷 | 44 卷 | 合计 |
+|---|---|---|---|
+| 目录条目 | 12 | 10 | 22 |
+| 锚点缺失 | **0** | **0** | **0** |
+| 文件缺失 | **0** | **0** | **0** |
+| 带锚点条目定位成功 | 9/9 | 7/7 | **16/16 = 100%** |
+| 标题与 NAV 完全一致 | 9/9 | 7/7 | **16/16 = 100%** |
+| 无锚点条目（表紙 / CONTENTS / 奥付） | 3 | 3 | 6（前后附页，非章节） |
+
+→ **结构还原可以做到"零启发式"**：NAV 锚点定位，不需要字号统计，也不需要 ML 版面模型（对 EPUB 而言）。
+
+### 附带发现：`<rt>` 必须剥离（否则标题都对不上）
+日文电子书**逐字注音**很常见：`<ruby>幕<rt>まく</rt>間<rt>あい</rt></ruby>`。
+剥离前 NAV `幕間` vs 正文 `幕まく間あい`（不一致 5 处）；剥离后**不一致 0**。
+→ 已实现 `text_no_rt()`，写入 `tools/nav_anchor_check.py`，M1 直接复用。
+
+### 正文标记画像（`p-003.xhtml` 实例）
+```
+body.vrtl.p-text                    ← vrtl = 竖排标记；p-text = 正文
+  div.main
+    div.start-1em
+      p.bold.mfont.font-110per#toc-002   ← 章节标题（粗体 + 110% 字号）
+    p（空, 含 br）×3                  ← 仅用于行距，需丢弃
+    div.h-indent-5em > p ▸ '１'       ← 场景编号（非标题）
+    p（裸标签）…                      ← 正文段落
+    p ▸ '…' with <ruby>…<rt>…</rt></ruby>
+```
+要点：
+- 正文段落是**裸 `<p>`**（无类名）；空段落需剔除以免污染翻译
+- 语义类名极简（全书画像：`p` 3650、`rt` 1977、`ruby` 1459、`br` 370、`span.tcy` 125、`div.h-indent-5em` 75、`div.start-4em` 39、`div.main` 25）
+- `span.tcy` = 縦中横（竖排中的横排数字）；`line-break-loose` / `word-break-break-all` = 竖排换行控制
+- **竖排仅体现为 CSS 与类名**，文字层正常 → 印证 D-015（竖排 EPUB 不是难题）
+
+**产出工具**：`tools/epub_probe.py`、`tools/nav_probe.py`、`tools/dump_xhtml.py`、`tools/nav_anchor_check.py`
+
+---
+
+## 3. 实测 #3/#4：本地模型（🚧 进行中）
+- Qwen3-8B-Q5_K_M.gguf 从 hf-mirror **下载中**（约 5.7 GB）
+- llama.cpp `b11053` CUDA 12.4 x64（含 cudart）**下载中** → `Z:\AgentHub\engines\llama.cpp`
+- 待补：实测吞吐（tok/s）、显存占用；14B 部分卸载可行性
+
+## 4. 实测 #5：中文 PDF 排版选型（✅ 完成 → **选定 Typst**）
+
+| 引擎 | 装/跑结果 | 证据 |
+|---|---|---|
+| WeasyPrint（BSD） | ❌ **失败** | `OSError: cannot load library 'libgobject-2.0-0'` —— Windows 缺 GTK/Pango 运行库 |
+| **Typst**（Apache-2.0） | ✅ **通过** | `pip install typst` 自带编译器（28 MB，**零外部依赖**）；A5 文档 **1.23 s** 出 36 KB PDF |
+
+**核验（不只"能出 PDF"）**：
+1. `pypdfium2` 取回页面文字 → **5/5 通过**（中文标题 / 正文 / 日文假名 / 英文数字 / 标点）
+2. 页面渲染成图片**人眼复核**：中文字形正常、标题黑体与正文宋体自动区分、首行缩进 2 字符、
+   **标点禁则生效**（行首未出现 `，。、」`）、中英混排间距合理、A5 + 页码正确
+
+**字体**：本机已装 `NotoSerifSC-VF.ttf` / `NotoSansSC-VF.ttf`，真实 family 名为
+**`Noto Serif SC`** / **`Noto Sans SC`**（不是 "Noto Serif CJK SC"）——**无需下载字体**。
+
+**架构影响**：内容真源由 "XHTML" 上提为 **IR**；EPUB 走 IR→XHTML，PDF 走 IR→Typst。
+两个适配器同源，仍满足"双语版与终版内容强一致"。
+
+**产出工具**：`tools/render_bench.py`、`tools/typst_check.py`
+
+## 5. 实测 #6：PDF 抽取对比（⛔ 缺素材）
+现有样书**均为 EPUB**，无法测 PDF 路径。
+**需要你提供 1 本文字版日文 PDF**（最好含竖排）——这也是 Q21 的真实样例。拿到后测
+pypdfium2 / pdfminer.six（+ PyMuPDF 对照）的抽取质量、竖排列序还原。
+
+## 6. 实测 #7：DeepSeek API 成本（⛔ 缺密钥）
+`tp doctor` 显示当前进程 **`DEEPSEEK_API_KEY` 未设置**。
+→ 需要你决定密钥如何接入（见对话中的提问），拿到后跑"单章真实成本"，校准计划书 §9 的估算。
+
+---
+
+## 7. 阶段结论
+
+- ✅ **M0 环境与骨架完成**：验收标准（`tp --version` 可跑、venv/缓存在 Z 盘、C 盘零新增）全部满足。
+- ✅ **最高风险项（结构识别）已消除**：NAV 锚点法在两本真实样书上 100% 命中。
+- 🚧 剩余实测依赖：模型/引擎下载完成、**PDF 样例**、**API 密钥**。
+
+**下一步**：补齐 #3~#7 → 汇总本报告 → 进入 M1（用样书第 1 章打通到双语 EPUB）。
