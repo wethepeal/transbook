@@ -315,5 +315,56 @@ def translate(
     console.print(("[green]✓[/green] " if not dry_run else "[cyan]◦[/cyan] ") + rep.summary())
 
 
+@app.command()
+def render(
+    target: Path = typer.Argument(Path("data/work/re0-v43"), help="工作目录（含 book.ir.json 与 translations.db）"),
+    mode: str = typer.Option("bilingual", "--mode", "-m", help="bilingual（对照，供审核）｜ zh（纯中文终版）"),
+    out: Path | None = typer.Option(None, "--out", "-o", help="输出 .epub 路径"),
+) -> None:
+    """⑥ 渲染：IR + 译文 → EPUB（双语对照 / 纯中文）。"""
+    from transbook.ir import DocumentIR
+    from transbook.render import CSS, build_chapters, build_nav, write_epub
+    from transbook.store import connect
+
+    if mode not in ("bilingual", "zh"):
+        console.print(f"[red]未知模式：{mode}（可选 bilingual / zh）[/red]")
+        raise typer.Exit(2)
+
+    work = target if target.is_dir() else target.parent
+    ir_path = work / "book.ir.json"
+    db_path = _resolve_db(target)
+    if not ir_path.is_file() or not db_path.is_file():
+        console.print(f"[red]缺少 book.ir.json 或 translations.db：{work}[/red]")
+        raise typer.Exit(1)
+
+    ir = DocumentIR.model_validate(json.loads(ir_path.read_text(encoding="utf-8")))
+    conn = connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT block_id, COALESCE(final_translation, translation) AS t "
+            "FROM segment WHERE COALESCE(final_translation, translation) IS NOT NULL"
+        ).fetchall()
+    finally:
+        conn.close()
+    translations = {r["block_id"]: r["t"] for r in rows}
+
+    chapters = build_chapters(ir, translations, mode=mode)
+    nav = build_nav(chapters)
+    out_path = out or (work / f"{ir.doc.id}.{mode}.epub")
+    write_epub(out_path, title=ir.doc.title, author=ir.doc.author,
+               language="zh", chapters=chapters, css=CSS, nav=nav,
+               images_dir=work / "assets", identifier=f"urn:transbook:{ir.doc.id}:{mode}")
+
+    translatable = len(ir.translatable())
+    covered = sum(1 for b in ir.translatable() if translations.get(b.id))
+    size_mb = out_path.stat().st_size / 1024 / 1024
+    console.print(f"[green]✓[/green] 已生成 {mode} 版 EPUB：{out_path}")
+    console.print(f"  章节 {len(chapters)} ｜ 段落覆盖 {covered}/{translatable}"
+                  f"（{covered / max(translatable, 1) * 100:.1f}%）｜ 体积 {size_mb:.2f} MB")
+    if covered < translatable:
+        console.print(f"  [yellow]提示：还有 {translatable - covered} 段没有译文，"
+                      f"先跑 `tp translate` 可补齐[/yellow]")
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
