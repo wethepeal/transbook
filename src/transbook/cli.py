@@ -226,5 +226,94 @@ def status(
     console.print(table)
 
 
+def _load_glossary(path: Path | None) -> dict[str, str]:
+    """术语表：`.json`（对象）或每行 `原文=译文` 的文本。零额外依赖。"""
+    if path is None:
+        return {}
+    if not path.is_file():
+        console.print(f"[yellow]术语表不存在，忽略：{path}[/yellow]")
+        return {}
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        data = json.loads(text)
+        return {str(k): str(v) for k, v in data.items()}
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        out[k.strip()] = v.strip()
+    return out
+
+
+@app.command()
+def translate(
+    target: Path = typer.Argument(Path("data/work/re0-v43"), help="工作目录或 .db 路径"),
+    engine: str = typer.Option("fake", "--engine", help="fake（零成本）｜ deepseek ｜ local（OpenAI 兼容）"),
+    model: str = typer.Option("", "--model", help="模型名（默认取 .env 或引擎默认）"),
+    base_url: str = typer.Option("", "--base-url", help="local 引擎端点，如 http://127.0.0.1:8080/v1"),
+    limit: int | None = typer.Option(None, "--limit", help="只译前 N 段（调试用）"),
+    max_cost: float = typer.Option(0.5, "--max-cost", help="成本硬上限（元），0 = 不限"),
+    batch_chars: int = typer.Option(2400, "--batch-chars", help="每批字符预算"),
+    batch_items: int = typer.Option(24, "--batch-items", help="每批段落数上限"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只分批并预估费用，**不调用任何 API**"),
+    glossary: Path | None = typer.Option(None, "--glossary", help="术语表（.json 或每行 原文=译文）"),
+    target_lang: str = typer.Option("zh", "--target-lang"),
+    price_tier: str = typer.Option("peak", "--price-tier", help="peak（保守）｜ idle"),
+) -> None:
+    """③ 翻译：段落 → 译文（可断点续跑、有成本护栏）。"""
+    from transbook.config import get
+    from transbook.store import connect
+    from transbook.translate import BookContext, DeepSeekProvider, FakeProvider, run
+    from transbook.translate.deepseek import DEFAULT_BASE_URL
+
+    db_path = _resolve_db(target)
+    if not db_path.is_file():
+        console.print(f"[red]找不到数据库：{db_path}[/red]")
+        raise typer.Exit(1)
+    conn = connect(db_path)
+
+    if engine == "fake":
+        provider = FakeProvider()
+    elif engine in ("deepseek", "local"):
+        key = get("DEEPSEEK_API_KEY") or ""
+        if not key:
+            if not dry_run:
+                console.print("[red]未配置 DEEPSEEK_API_KEY：请复制 .env.example 为 .env 并填入密钥[/red]")
+                raise typer.Exit(2)
+            key = "dry-run-placeholder"  # 干跑不会发请求，允许无密钥预估
+        default_model = get("TRANSLATE_MODEL") or ("deepseek-flash" if engine == "deepseek" else "")
+        provider = DeepSeekProvider(
+            key,
+            model=model or default_model or "deepseek-flash",
+            base_url=base_url or get("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL,
+            price_tier=price_tier,
+        )
+    else:
+        console.print(f"[red]未知引擎：{engine}（可选 fake / deepseek / local）[/red]")
+        raise typer.Exit(2)
+
+    doc = conn.execute("SELECT * FROM doc LIMIT 1").fetchone()
+    ctx = BookContext(
+        doc_id=doc["id"] if doc else "",
+        title=doc["title"] if doc else "",
+        author=doc["author"] if doc else "",
+        source_lang=(doc["source_lang"] if doc else "") or "ja",
+        target_lang=target_lang,
+        glossary=_load_glossary(glossary),
+    )
+    if ctx.glossary:
+        console.print(f"术语表：{len(ctx.glossary)} 条")
+
+    try:
+        rep = run(conn, provider, ctx, limit=limit, max_cost=max_cost,
+                  batch_chars=batch_chars, batch_items=batch_items, dry_run=dry_run,
+                  progress=(None if dry_run else lambda m: console.print(f"  [dim]{m}[/dim]")))
+    finally:
+        conn.close()
+    console.print(("[green]✓[/green] " if not dry_run else "[cyan]◦[/cyan] ") + rep.summary())
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
