@@ -284,11 +284,14 @@ def translate(
                 raise typer.Exit(2)
             key = "dry-run-placeholder"  # 干跑不会发请求，允许无密钥预估
         default_model = get("TRANSLATE_MODEL") or ("deepseek-flash" if engine == "deepseek" else "")
+        # 本地 Qwen3 等思考型模型必须关闭思考，否则 token 耗尽且返回空内容（M0 实测）
+        extra = {"chat_template_kwargs": {"enable_thinking": False}} if engine == "local" else {}
         provider = DeepSeekProvider(
             key,
             model=model or default_model or "deepseek-flash",
             base_url=base_url or get("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL,
             price_tier=price_tier,
+            extra_body=extra,
         )
     else:
         console.print(f"[red]未知引擎：{engine}（可选 fake / deepseek / local）[/red]")

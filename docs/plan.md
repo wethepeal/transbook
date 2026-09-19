@@ -151,6 +151,14 @@ TranslatedIR（原文+机翻+定稿+状态）
 > ⚠️ **AWQ 不可用**：AWQ 属 vLLM 生态，而 vLLM 仅支持 Linux；本机 WSL2 有运行时但**无发行版**。
 > 因此本地统一走 **GGUF**。Provider 接口与量化格式解耦，将来若上 WSL2 只需换 base_url。
 > **这些数字会在 M0 用实测吞吐复验**（§12）。
+>
+> ✅ **M0 实测结论（2026-09-17，llama.cpp Vulkan build 11053）**：
+> Qwen3-8B-Q5_K_M（5.44 GiB）**全 GPU 卸载可取** —— 生成 **32.2 tok/s**、提示处理 **1049.7 t/s**；
+> 纯 CPU 仅 5.31 tok/s（**GPU 快 6.1 倍**）；部分卸载 `-ngl 16` 为 10.18 tok/s（即 14B 的降级路线）。
+> OpenAI 兼容端点实测可译：`夢の城に帰り着いた。` → `回到了梦想中的城市。`
+>
+> ⚠️ **必须关闭思考模式**：Qwen3 是思考型模型，不关会在思考上耗尽 token 且 **content 返回空**。
+> 本地引擎已在 `tp translate --engine local` 中默认传 `chat_template_kwargs.enable_thinking=false`。
 
 ---
 
@@ -307,6 +315,9 @@ Z:\_cache\                           # 各类缓存
 > ✅ **已用真实样书 dry-run 校准（2026-09-17）**：3413 块 → 141 批，
 > **预估 ¥0.5361（flash）/ ¥1.9680（v4-pro）**（空闲时段）——与上表估算吻合。
 > 复核命令：`tp translate <workdir> --engine deepseek --dry-run --price-tier idle`（**不花钱**）。
+>
+> ✅ **本地模型实测（同日）**：Qwen3-8B-Q5_K_M 全 GPU 卸载 **32.2 tok/s**、提示处理 **1049.7 t/s**；
+> 按 99k 输出 token 估算，**整本约 1~1.5 小时**（远快于原估的 6~20 小时）；纯 CPU 仅 5.31 tok/s。
 >
 > ⚠️ 真实用量仍受提示词长度、重试次数影响；以 `.env` 接入后跑单章实测做最终确认。
 

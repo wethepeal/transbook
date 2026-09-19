@@ -102,6 +102,32 @@ def test_deepseek_requires_key():
         DeepSeekProvider("")
 
 
+def test_extra_body_merged_into_request(monkeypatch):
+    """本地 Qwen3 必须能带上 enable_thinking=false（否则返回空内容）。"""
+    import httpx
+
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content": '{"translations":[{"id":"a","text":"甲"}]}'}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+
+    def fake_post(url, headers=None, json=None, timeout=None):  # noqa: A002
+        captured.update(json or {})
+        return FakeResp()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    p = DeepSeekProvider("k", extra_body={"chat_template_kwargs": {"enable_thinking": False}})
+    outs, _ = p.translate([SegmentIn("a", "x")], BookContext())
+    assert outs[0].translation == "甲"
+    assert captured["chat_template_kwargs"] == {"enable_thinking": False}
+    assert captured["model"] and captured["messages"]
+
+
 # ── 端到端（Fake）───────────────────────────────────────────────────
 def make_db(tmp_path: Path, n: int = 5):
     conn = connect(tmp_path / "t.db")

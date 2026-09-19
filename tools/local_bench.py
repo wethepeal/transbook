@@ -51,37 +51,38 @@ def vram() -> str:
         return "n/a"
 
 
-def run_cli(model: pathlib.Path, ngl: int, tokens: int, ctx: int) -> dict:
-    exe = find_exe("llama-cli.exe")
+def run_bench(model: pathlib.Path, ngl: int, tokens: int, ctx: int) -> dict:
+    """用 llama-bench 测吞吐（比 llama-cli 可靠：clai 新版会进交互模式）。
+
+    返回 pp/tg 两个速度。
+    """
+    exe = find_exe("llama-bench.exe")
     if not exe:
-        return {"error": "未找到 llama-cli.exe（引擎是否已解压到 Z:\\AgentHub\\engines\\llama.cpp）"}
-    cmd = [str(exe), "-m", str(model), "-ngl", str(ngl), "-c", str(ctx), "-n", str(tokens),
-           "--no-warmup", "-no-cnv", "-p", PROMPT]
+        return {"error": "未找到 llama-bench.exe"}
+    cmd = [str(exe), "-m", str(model), "-ngl", str(ngl), "-p", "128", "-n", str(tokens), "-r", "2"]
     t0 = time.perf_counter()
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900,
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800,
                               encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
-        return {"error": "超时（>15 分钟）"}
+        return {"error": "超时"}
     wall = time.perf_counter() - t0
-    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    rows = [ln for ln in (proc.stdout or "").splitlines() if re.search(r"\|\s*(pp|tg)\d+", ln)]
     pp = tg = None
-    m = re.search(r"prompt eval time\s*=\s*([\d.]+) ms\s*/\s*(\d+) tokens.*?([\d.]+) tokens per second", text, re.S)
-    if m:
-        pp = float(m.group(3))
-    m2 = re.search(r"\beval time\s*=\s*([\d.]+) ms\s*/\s*(\d+) runs.*?([\d.]+) tokens per second", text, re.S)
-    if m2:
-        tg = float(m2.group(3))
-    # 抓取输出正文（llama-cli 会在提示后打印生成内容）
-    body = ""
-    if "訳文：" in (proc.stdout or ""):
-        body = proc.stdout.split("訳文：", 1)[1].strip()[:160]
-    backend = ""
-    mb = re.search(r"(Vulkan|CUDA|CPU)[^\n]*", text)
-    if mb:
-        backend = mb.group(0)[:60]
-    return {"ngl": ngl, "wall": wall, "pp": pp, "tg": tg, "vram": vram(),
-            "backend": backend, "body": body, "exit": proc.returncode}
+    for ln in rows:
+        cells = [c.strip() for c in ln.split("|") if c.strip()]
+        if len(cells) < 6:
+            continue
+        try:
+            val = float(cells[-1].split("±")[0].strip())
+        except ValueError:
+            continue
+        if cells[-2].startswith("pp"):
+            pp = val
+        elif cells[-2].startswith("tg"):
+            tg = val
+    backend = "Vulkan(GPU)" if ngl > 0 else "CPU"
+    return {"ngl": ngl, "wall": wall, "pp": pp, "tg": tg, "vram": vram(), "backend": backend}
 
 
 def run_server(model: pathlib.Path, ngl: int, port: int = 18080, ctx: int = 2048) -> dict:
@@ -111,6 +112,8 @@ def run_server(model: pathlib.Path, ngl: int, port: int = 18080, ctx: int = 2048
                 {"role": "user", "content": "原文：夢の城に帰り着いた。 訳文："},
             ],
             "max_tokens": 64, "temperature": 0.2,
+            # 关键：Qwen3 是思考型模型，不关掉思考会耗尽 token 且 content 为空
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -149,17 +152,15 @@ def main() -> None:
         print(f"  {n}: {find_exe(n)}")
 
     print("\n【吞吐实测】")
-    print(f"{'ngl':>5}{'墙钟(秒)':>10}{'提示处理(tok/s)':>18}{'生成(tok/s)':>14}  显存(用/总)")
+    print(f"{'ngl':>5}{'墙钟(秒)':>10}{'提示处理(tok/s)':>18}{'生成(tok/s)':>14}  后端")
     for ngl in (int(x) for x in args.ngl.split(",")):
-        r = run_cli(model, ngl, args.tokens, args.ctx)
+        r = run_bench(model, ngl, args.tokens, args.ctx)
         if "error" in r:
             print(f"{ngl:>5}{'FAIL':>10}  {r['error']}")
             continue
         pp = f"{r['pp']:.1f}" if r["pp"] else "—"
         tg = f"{r['tg']:.2f}" if r["tg"] else "—"
-        print(f"{ngl:>5}{r['wall']:>10.1f}{pp:>18}{tg:>14}  {r['vram']}")
-        if r["body"]:
-            print(f"      译文样本: {r['body']!r}")
+        print(f"{ngl:>5}{r['wall']:>10.1f}{pp:>18}{tg:>14}  {r.get('backend','')}")
 
     if not args.skip_server:
         print("\n【OpenAI 兼容端点实测】")

@@ -73,6 +73,7 @@ class DeepSeekProvider(TranslationProvider):
         price_tier: str = "peak",
         timeout: float = 180.0,
         transport: Callable[[list[dict[str, str]], str], tuple[str, dict[str, Any]]] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("缺少 DeepSeek API key（请在 .env 里设置 DEEPSEEK_API_KEY）")
@@ -83,6 +84,9 @@ class DeepSeekProvider(TranslationProvider):
         self.price_tier = price_tier
         self.timeout = timeout
         self._transport = transport
+        #: 引擎特有参数。**本地 Qwen3 必须传 `chat_template_kwargs.enable_thinking=False`**：
+        #: 否则 token 全花在思考上，翻译会返回空内容（M0 实测踩过）。
+        self.extra_body = extra_body or {}
 
     # ── 单价 ────────────────────────────────────────────────────
     def price_of(self) -> dict[str, float]:
@@ -105,6 +109,7 @@ class DeepSeekProvider(TranslationProvider):
                 "messages": messages,
                 "temperature": self.temperature,
                 "response_format": {"type": "json_object"},
+                **self.extra_body,
             },
             timeout=self.timeout,
         )
