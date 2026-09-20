@@ -17,6 +17,8 @@ interface Props {
 
 const KEY = 'DEEPSEEK_API_KEY'
 const SECRET_NAMES = new Set([KEY])
+/** 下拉里的"自己填"选项：本地端点上的模型名是任意的，不能只给固定几项 */
+const CUSTOM = '__custom__'
 
 /** 逐字段校验；返回空串表示没问题。 */
 export function validateField(name: string, value: string): string {
@@ -36,6 +38,8 @@ export default function Settings({ onError }: Props) {
   const [view, setView] = useState<ConfigView | null>(null)
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [clearingKey, setClearingKey] = useState(false)
+  /** 哪些下拉字段被切到了「自定义…」 */
+  const [custom, setCustom] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [savedTo, setSavedTo] = useState('')
@@ -46,6 +50,7 @@ export default function Settings({ onError }: Props) {
       setView(await api.config())
       setDraft({})
       setClearingKey(false)
+      setCustom({})
     } catch (e) {
       onError(String(e))
     } finally {
@@ -143,7 +148,15 @@ export default function Settings({ onError }: Props) {
             const value = draft[f.name] ?? (isSecret ? '' : f.value)
             const err = errors[f.name]
             const inputId = `cfg-${f.name}`
+            const selectId = `${inputId}-select`
             const errId = `${inputId}-err`
+
+            // 有可选值就渲染下拉框；当前值不在列表里（比如本地端点上的任意模型名）
+            // 或者用户主动选了「自定义…」，就退回文本框。
+            const isChoice = f.options.length > 0
+            const known = f.options.some((o) => o.value === value)
+            const customMode = isChoice && (custom[f.name] || (value !== '' && !known))
+            const controlId = isChoice && !customMode ? selectId : inputId
 
             return (
               <div className="config-field" key={f.name}>
@@ -151,32 +164,62 @@ export default function Settings({ onError }: Props) {
                     "DeepSeek API Key 当前 sk-045******ba86"，屏幕阅读器读起来又长又乱。
                     视觉上两行仍同排。 */}
                 <div className="config-label-row">
-                  <label htmlFor={inputId}>{f.label}</label>
+                  <label htmlFor={controlId}>{f.label}</label>
                   {isSecret && f.is_set && (
                     <span className="mono field-current">当前 {f.masked}</span>
                   )}
                 </div>
 
                 <div className="config-input">
-                  <input
-                    id={inputId}
-                    type={isSecret ? 'password' : 'text'}
-                    className={err ? 'invalid' : undefined}
-                    value={value}
-                    placeholder={isSecret
-                      ? (f.is_set ? '留空 = 不修改' : 'sk-…')
-                      : '留空使用默认'}
-                    autoComplete={isSecret ? 'off' : undefined}
-                    spellCheck={false}
-                    disabled={saving}
-                    aria-invalid={err ? true : undefined}
-                    aria-describedby={err ? errId : undefined}
-                    onChange={(e) => {
-                      setSavedTo('')
-                      if (isSecret) setClearingKey(false)
-                      setDraft((d) => ({ ...d, [f.name]: e.target.value }))
-                    }}
-                  />
+                  {isChoice && (
+                    <select
+                      id={selectId}
+                      className="config-select"
+                      value={customMode ? CUSTOM : value}
+                      disabled={saving}
+                      onChange={(e) => {
+                        const v = e.target.value
+                        setSavedTo('')
+                        if (v === CUSTOM) {
+                          setCustom((c) => ({ ...c, [f.name]: true }))
+                          setDraft((d) => ({ ...d, [f.name]: '' }))
+                        } else {
+                          setCustom((c) => ({ ...c, [f.name]: false }))
+                          setDraft((d) => ({ ...d, [f.name]: v }))
+                        }
+                      }}
+                    >
+                      {f.options.map((o) => (
+                        <option key={o.value || '__default'} value={o.value}>{o.label}</option>
+                      ))}
+                      <option value={CUSTOM}>自定义…</option>
+                    </select>
+                  )}
+
+                  {(!isChoice || customMode) && (
+                    <input
+                      id={inputId}
+                      type={isSecret ? 'password' : 'text'}
+                      className={err ? 'invalid' : undefined}
+                      value={value}
+                      placeholder={isSecret
+                        ? (f.is_set ? '留空 = 不修改' : 'sk-…')
+                        : (customMode ? '例如 Qwen3-8B-Q5_K_M' : '留空使用默认')}
+                      autoComplete={isSecret ? 'off' : undefined}
+                      spellCheck={false}
+                      disabled={saving}
+                      // 自定义模式下 label 指向的是下拉框，这里补一个可访问名
+                      aria-label={customMode ? `${f.label}（自定义）` : undefined}
+                      aria-invalid={err ? true : undefined}
+                      aria-describedby={err ? errId : undefined}
+                      onChange={(e) => {
+                        setSavedTo('')
+                        if (isSecret) setClearingKey(false)
+                        setDraft((d) => ({ ...d, [f.name]: e.target.value }))
+                      }}
+                    />
+                  )}
+
                   {isSecret && f.is_set && (
                     <button
                       type="button"

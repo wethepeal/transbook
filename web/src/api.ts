@@ -72,6 +72,11 @@ export interface QaReport {
   issues: QaIssue[]
 }
 
+export interface ConfigOption {
+  value: string
+  label: string
+}
+
 export interface ConfigField {
   name: string
   label: string
@@ -81,6 +86,8 @@ export interface ConfigField {
   is_set: boolean
   value: string
   masked: string
+  /** 非空时前端渲染成下拉框（可选值由后端下发，避免两边各维护一份清单） */
+  options: ConfigOption[]
 }
 
 export interface ConfigView {

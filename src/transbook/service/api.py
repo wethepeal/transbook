@@ -14,7 +14,7 @@ import asyncio
 import json
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -32,15 +32,36 @@ SSE_INTERVAL = 0.4
 #: SSE 最长挂多久（秒），防止连接泄漏；到点会让客户端重连。
 SSE_MAX_SECONDS = 3600
 
-#: 配置页可编辑的项：(键名, 界面标签, 是否机密, 说明)。
-#: 机密项**永远不会把明文回传给前端**，只回显打码后的首尾。
-CONFIG_FIELDS: tuple[tuple[str, str, bool, str], ...] = (
-    ("DEEPSEEK_API_KEY", "DeepSeek API Key", True,
-     "翻译必需的密钥。去 platform.deepseek.com 申请；换机器/重新部署后要重新填。"),
-    ("DEEPSEEK_BASE_URL", "接口地址", False,
-     "留空用 DeepSeek 官方。填本地地址（如 http://127.0.0.1:8117/v1）即可改用本地模型。"),
-    ("TRANSLATE_MODEL", "默认模型", False,
-     "留空由引擎决定。常用 deepseek-flash（便宜快）/ deepseek-chat。"),
+class ConfigFieldSpec(NamedTuple):
+    """配置页的一项：键名、界面标签、是否机密、说明、可选值。"""
+
+    name: str
+    label: str
+    secret: bool
+    hint: str
+    #: 非空时界面渲染成下拉框；空值项表示"用默认"
+    options: tuple[tuple[str, str], ...] = ()
+
+
+#: 「默认模型」的下拉选项，取值来自 DeepSeek 官方定价页（Models & Pricing）。
+#: 目前在售的**只有** deepseek-flash 与 deepseek-v4-pro 两个；老的
+#: `deepseek-chat` / `deepseek-reasoner` 已不在文档里，不该再作为推荐项出现。
+#: 空值表示用引擎默认——`DeepSeekProvider` 的默认模型就是 `deepseek-flash`。
+MODEL_CHOICES: tuple[tuple[str, str], ...] = (
+    ("", "默认（deepseek-flash）"),
+    ("deepseek-flash", "deepseek-flash — 便宜快，支持图片输入"),
+    ("deepseek-v4-pro", "deepseek-v4-pro — 能力更强，单价约为 flash 的 3 倍"),
+)
+
+#: 配置页可编辑的项。机密项**永远不会把明文回传给前端**，只回显打码后的首尾。
+CONFIG_FIELDS: tuple[ConfigFieldSpec, ...] = (
+    ConfigFieldSpec("DEEPSEEK_API_KEY", "DeepSeek API Key", True,
+                    "翻译必需的密钥。去 platform.deepseek.com 申请；换机器/重新部署后要重新填。"),
+    ConfigFieldSpec("DEEPSEEK_BASE_URL", "接口地址", False,
+                    "留空用 DeepSeek 官方。填本地地址（如 http://127.0.0.1:8117/v1）即可改用本地模型。"),
+    ConfigFieldSpec("TRANSLATE_MODEL", "默认模型", False,
+                    "留空即用引擎默认。接了本地端点时选「自定义」填任意模型名。",
+                    options=MODEL_CHOICES),
 )
 
 
@@ -133,17 +154,19 @@ def create_app(root: str | Path = P.DEFAULT_ROOT,
         """当前生效的配置。**机密项只回打码值**，绝不回明文。"""
         path = cfg.env_write_path()
         fields = []
-        for name, label, secret, hint in CONFIG_FIELDS:
-            raw = (cfg.get(name) or "").strip()
+        for spec in CONFIG_FIELDS:
+            raw = (cfg.get(spec.name) or "").strip()
             fields.append({
-                "name": name,
-                "label": label,
-                "hint": hint,
-                "secret": secret,
+                "name": spec.name,
+                "label": spec.label,
+                "hint": spec.hint,
+                "secret": spec.secret,
                 "is_set": bool(raw),
                 # 机密项连"值"都不给，前端只能拿到打码串
-                "value": "" if secret else raw,
-                "masked": mask_secret(raw) if secret else "",
+                "value": "" if spec.secret else raw,
+                "masked": mask_secret(raw) if spec.secret else "",
+                # 可选值由后端下发，避免模型清单在前后端各维护一份、迟早对不上
+                "options": [{"value": v, "label": lb} for v, lb in spec.options],
             })
         return {
             "env_file": str(path),
@@ -163,7 +186,7 @@ def create_app(root: str | Path = P.DEFAULT_ROOT,
         作业在独立子进程里跑，它继承本进程的工作目录与环境变量，
         所以改完立刻提交的作业也会用上新配置。
         """
-        known = {name for name, *_ in CONFIG_FIELDS}
+        known = {spec.name for spec in CONFIG_FIELDS}
         unknown = sorted(set(patch.values) - known)
         if unknown:
             raise HTTPException(400, f"不认识的配置项：{', '.join(unknown)}")

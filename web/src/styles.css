@@ -583,6 +583,18 @@ button.tiny {
   min-width: 0;
   max-width: 620px;
 }
+/* 下拉框：让出剩余宽度给「自定义」时的文本框，所以不参与 flex-grow */
+.config-select {
+  flex: 0 1 auto;
+  min-width: 260px;
+  max-width: 620px;
+}
+/* 原生下拉列表在深色主题下默认是浅底黑字，会把选项衬得看不清，
+   这里显式给 option 上色（Windows 上 Chrome/Edge 认这两条） */
+.config-select option {
+  background: var(--panel-2);
+  color: var(--fg);
+}
 .field-hint,
 .field-error,
 .field-warn {

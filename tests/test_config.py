@@ -188,3 +188,44 @@ def test_config_works_without_built_frontend(isolated_env, tmp_path, monkeypatch
     assert c.get("/api/config").status_code == 200
     # 没有界面时 `/` 不托管 HTML，而是回一条说明，确认这次确实是"没有界面"
     assert "前端未构建" in c.get("/").json()["detail"]
+
+
+# ── 可选值（下拉框）────────────────────────────────────────────────
+def test_model_field_exposes_choices(client: TestClient):
+    """「默认模型」要给下拉选项，且第一项是"默认"（空值 = 用引擎默认）。"""
+    body = client.get("/api/config").json()
+    model = next(f for f in body["fields"] if f["name"] == "TRANSLATE_MODEL")
+
+    values = [o["value"] for o in model["options"]]
+    assert values == ["", "deepseek-flash", "deepseek-v4-pro"]
+    assert "deepseek-flash" in model["options"][0]["label"], "默认项要写明默认用的是哪个模型"
+
+
+def test_every_model_choice_is_a_priced_model():
+    """下拉里出现的模型，必须是引擎认识、且算得出价钱的。
+
+    否则用户选了它，`DeepSeekProvider.estimate_cost` 会**静默**回落到 flash 的单价
+    （`PRICES.get(model, PRICES["deepseek-flash"])`），账目就错了却不报错。
+    """
+    from transbook.service.api import MODEL_CHOICES
+    from transbook.translate.deepseek import PRICES
+
+    for value, _label in MODEL_CHOICES:
+        if value:
+            assert value in PRICES, f"{value} 没有报价，不该出现在下拉里"
+
+
+def test_secret_and_free_text_fields_have_no_choices(client: TestClient):
+    """只有需要枚举的字段才给选项，其余保持自由文本。"""
+    body = client.get("/api/config").json()
+    by_name = {f["name"]: f for f in body["fields"]}
+    assert by_name["DEEPSEEK_API_KEY"]["options"] == []
+    assert by_name["DEEPSEEK_BASE_URL"]["options"] == []
+
+
+def test_custom_model_value_round_trips(client: TestClient, isolated_env: Path):
+    """下拉之外的模型名（本地端点）必须能存能读——所以界面保留了「自定义」。"""
+    client.put("/api/config", json={"values": {"TRANSLATE_MODEL": "Qwen3-8B-Q5_K_M"}})
+    body = client.get("/api/config").json()
+    model = next(f for f in body["fields"] if f["name"] == "TRANSLATE_MODEL")
+    assert model["value"] == "Qwen3-8B-Q5_K_M"
