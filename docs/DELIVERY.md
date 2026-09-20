@@ -715,7 +715,25 @@ Translation_Engineering/
 4. **繁体字检测是启发式**（繁体专用字 + 日文专用汉字，阈值 2）。单个繁体字可能是刻意保留的人名用字，故不报。
 5. **计数与实测口径**：`tp translate --dry-run` 的预估约为实际的 **1.7 倍**（系统提示词与真实 token 数开销），保守可用。
 6. **输出被重定向时，GBK 表达不了的字符会降级成 `?`**。Windows 上 stdout 被管道或文件捕获时按 ANSI 代码页编码，而 GBK 里没有 `✓`(U+2713)、`⑪`(U+246A) 这些字符。已在 `cli.py` 加了全局兜底（`errors="replace"`），所以只会显示降级、不会中断命令；直接输出到真实控制台时不受影响。**加兜底之前，`tp ... | ...` 和 `tp ... > log.txt` 会直接以非零码退出**（实测确认）。
-7. **`tools/` 下的开发期探针脚本放宽了三条 lint 规则**（`UP031` %-格式化、`E501` 行宽、`B007` 占位循环变量），理由写在 `pyproject.toml` 的 `per-file-ignores` 里——其中若干"超长行"是刻意为之（逼排版引擎处理自动换行），拆行会破坏意图。`src` 与 `tests` 是**零告警**，CI 的 ruff 步骤为阻断。
+7. **Push 前先跑一次密钥检查**。`tools/check_secrets.py` 会扫出"看起来像真实凭据"的字符串；
+   加 `--history` 连全部 git 历史对象一起扫。CI 每次都会跑工作树那一遍。
+
+   ```powershell
+   python tools\check_secrets.py             # 工作树（CI 跑的就是这个）
+   python tools\check_secrets.py --history   # 连历史一起扫（仓库转公开前必做）
+   ```
+
+   > 这条不是纸上谈兵：本项目**真的踩过一次**——真实 API Key 被写进测试文件并推送到远端，
+   > 只能重写历史清除（`git filter-repo --replace-text`），密钥作废重发。
+   > 关键教训是：**只在新提交里删掉是不够的**，旧提交的 blob 里仍然留着，
+   > 用 `--history` 才扫得出来。
+
+   | 症状 | 处理 |
+   |---|---|
+   | 只是占位符被误报 | 把该模式加进 `tools/check_secrets.py` 的 `ALLOW` |
+   | 确实是真密钥 | **先作废它**（去服务商后台重新签发），再用 `git filter-repo` 从历史清除，最后强推 |
+
+8. **`tools/` 下的开发期探针脚本放宽了三条 lint 规则**（`UP031` %-格式化、`E501` 行宽、`B007` 占位循环变量），理由写在 `pyproject.toml` 的 `per-file-ignores` 里——其中若干"超长行"是刻意为之（逼排版引擎处理自动换行），拆行会破坏意图。`src` 与 `tests` 是**零告警**，CI 的 ruff 步骤为阻断。
 
 **验证覆盖的边界**：
 

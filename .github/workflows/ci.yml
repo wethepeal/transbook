@@ -41,5 +41,10 @@ jobs:
       - name: ruff 静态检查
         run: uv run ruff check .
 
+      # 这个项目真的踩过一次：真实 API Key 被写进测试文件并推送上去，
+      # 只能重写历史清除、密钥作废重发。所以就别指望人自觉了，让 CI 每次拦一道。
+      - name: 密钥泄露检查
+        run: uv run python tools/check_secrets.py
+
       - name: pytest
         run: uv run pytest -q
