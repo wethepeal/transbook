@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -20,7 +19,6 @@ from transbook.service import pipeline as P
 from transbook.service.api import create_app
 from transbook.store import connect
 from transbook.store import db as store
-from transbook.translate.fake import FakeProvider
 
 
 @pytest.fixture

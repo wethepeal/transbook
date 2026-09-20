@@ -40,7 +40,7 @@ class Usage:
     cost: float = 0.0
     calls: int = 0
 
-    def add(self, other: "Usage") -> None:
+    def add(self, other: Usage) -> None:
         self.tokens_in += other.tokens_in
         self.tokens_out += other.tokens_out
         self.cost += other.cost

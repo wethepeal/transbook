@@ -19,9 +19,8 @@ from typing import Any
 
 from lxml import etree
 
-from transbook.ir import Block, DocumentIR, DocMeta, InlineSpan, TocEntry
-from transbook.textutil import (classify_matter, count_rt, is_blank_block,
-                                localname, text_without_rt)
+from transbook.ir import Block, DocMeta, DocumentIR, InlineSpan, TocEntry
+from transbook.textutil import classify_matter, count_rt, is_blank_block, localname, text_without_rt
 
 XHTML_TYPES = ("application/xhtml+xml", "text/html")
 XLINK_NS = "http://www.w3.org/1999/xlink"
@@ -412,9 +411,11 @@ class EpubIngestor:
                     continue
                 cells.append(text_without_rt(td))
 
-                def _n(attr: str) -> int:
+                # 用默认参数把当轮的 `td` **绑进闭包**：否则 `_n` 引用的是循环变量，
+                # 等它被调用时指向的已经是别的单元格（B023 说的就是这件事）。
+                def _n(attr: str, _td=td) -> int:
                     try:
-                        return max(1, int(td.get(attr) or 1))
+                        return max(1, int(_td.get(attr) or 1))
                     except (TypeError, ValueError):
                         return 1
 

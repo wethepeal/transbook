@@ -3,8 +3,8 @@
 from transbook.ir.models import (
     SCHEMA_VERSION,
     Block,
-    DocumentIR,
     DocMeta,
+    DocumentIR,
     InlineSpan,
     TocEntry,
 )

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pypdfium2 as pdfium  # noqa: E402
 
-from transbook.ingest.pdf import char_height, detect_vertical  # noqa: E402
+from transbook.ingest.pdf import char_height  # noqa: E402
 from transbook.textutil import normalize_ws  # noqa: E402
 
 

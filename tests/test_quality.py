@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from transbook.ir import Block, DocumentIR, DocMeta
+from transbook.ir import Block, DocMeta, DocumentIR
 from transbook.quality import check, extract_candidates, load_glossary, write_candidates
 from transbook.store import connect, import_ir, record_translation
-
 
 # ── 术语抽取 ────────────────────────────────────────────────────────
 TEXTS = [

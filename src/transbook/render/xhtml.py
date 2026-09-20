@@ -16,7 +16,7 @@ from typing import Literal
 
 from lxml import etree
 
-from transbook.ir import Block, DocumentIR
+from transbook.ir import DocumentIR
 
 XHTML_NS = "http://www.w3.org/1999/xhtml"
 XML_NS = "http://www.w3.org/XML/1998/namespace"

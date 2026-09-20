@@ -14,7 +14,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from transbook.textutil import normalize_ws  # noqa: E402
 
 
 def paras(work: str) -> list[str]:

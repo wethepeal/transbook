@@ -10,10 +10,9 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
-import pytest
 from lxml import etree
 
-from transbook.ir import Block, DocumentIR, DocMeta
+from transbook.ir import Block, DocMeta, DocumentIR
 from transbook.render.epub import COVER_HREF, write_epub
 from transbook.render.xhtml import CSS, build_chapters, build_cover, build_nav
 

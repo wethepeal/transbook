@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 KATAKANA = re.compile(r"[\u30a1-\u30f6\u30fc]{2,12}")
 KANJI = re.compile(r"[\u4e00-\u9fff]{2,4}")

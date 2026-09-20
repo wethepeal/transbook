@@ -50,6 +50,19 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# B008 报的是"在默认参数里调用函数"，但 `x: str = typer.Option(...)`、`d: X = Depends(...)`
+# 恰恰是 Typer / FastAPI 的**规定写法**，不是 bug——关掉整条规则，而不是到处写 noqa。
+# （全部 23 处命中都是这一类，已逐一核对。）
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# `tools/` 下全是**开发期的一次性探针与基准脚本**，不进任何产物。这里只放宽三条，
+# 其余规则（未定义名 F821、未用导入 F401、未绑定循环变量 B023 等真问题）照查：
+#   UP031 —— 这些脚本大量用 %-格式化打印对齐表格，改成 f-string 反而更难读；
+#   E501 —— 部分"样本串"刻意写得极长（如 typst_check / render_bench 里 240+ 字的
+#           中英混排段落），目的就是逼排版引擎处理自动换行，拆行会破坏意图；
+#   B007 —— `for i, _ in enumerate(...)` 这类占位循环变量。
+"tools/*" = ["UP031", "E501", "B007"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from transbook.ir import Block, DocumentIR, DocMeta
+from transbook.ir import Block, DocMeta, DocumentIR
 from transbook.render import build_typst, render_pdf
 from transbook.render.pdf import esc
 
@@ -79,7 +79,7 @@ def test_missing_translation_in_zh_is_skipped():
 # ── 编译与文字级验证 ────────────────────────────────────────────────
 def test_render_pdf_and_extract_text(tmp_path: Path):
     """编译出 PDF，并用 pypdfium2 取回文字——证明中文字形真的写进去了。"""
-    typst = pytest.importorskip("typst")
+    pytest.importorskip("typst")
     pdfium = pytest.importorskip("pypdfium2")
     (tmp_path / "assets").mkdir()
     res = render_pdf(tmp_path, make_ir(with_image=False), TR, mode="zh")

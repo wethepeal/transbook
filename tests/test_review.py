@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from transbook.ir import Block, DocumentIR, DocMeta
+from transbook.ir import Block, DocMeta, DocumentIR
 from transbook.review import apply_tsv, clear_final, export_markdown, export_tsv
 from transbook.store import connect, import_ir, record_translation
 
@@ -17,7 +17,7 @@ def make_db(tmp_path: Path, texts: list[str] | None = None):
                     blocks=[Block(id=f"b{i:06d}", type="paragraph", text=t)
                             for i, t in enumerate(texts, start=1)])
     import_ir(conn, ir)
-    for i, t in enumerate(texts, start=1):
+    for i in range(1, len(texts) + 1):
         record_translation(conn, f"doc:b{i:06d}", f"机翻{i}", engine="fake")
     return db, conn
 

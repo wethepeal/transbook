@@ -263,7 +263,7 @@ def status(
     table.add_column("项", style="cyan", width=12)
     table.add_column("值", overflow="ellipsis", max_width=96)
     for d in s["docs"]:
-        table.add_row(f"文档", f"{d['id']} ｜ {d['title'] or '(无标题)'} ｜ {d['source_lang']} ｜ "
+        table.add_row("文档", f"{d['id']} ｜ {d['title'] or '(无标题)'} ｜ {d['source_lang']} ｜ "
                                f"{d['block_count']} 块")
     table.add_row("段落总数", str(s["n"]))
     table.add_row("已机翻", f"{s['done']}（{s['done'] / max(s['n'], 1) * 100:.1f}%）")
@@ -451,8 +451,10 @@ def summarize(
 
 @app.command()
 def render(
-    target: Path = typer.Argument(Path("data/work/re0-v43"), help="工作目录（含 book.ir.json 与 translations.db）"),
-    mode: str = typer.Option("bilingual", "--mode", "-m", help="bilingual（对照，供审核）｜ zh（纯中文终版）"),
+    target: Path = typer.Argument(Path("data/work/re0-v43"),
+                                  help="工作目录（含 book.ir.json 与 translations.db）"),
+    mode: str = typer.Option("bilingual", "--mode", "-m",
+                             help="bilingual（对照，供审核）｜ zh（纯中文终版）"),
     to: str = typer.Option("epub", "--to", help="epub ｜ pdf ｜ both"),
     out_dir: Path | None = typer.Option(None, "--out", "-o", help="输出目录（默认工作目录）"),
 ) -> None:
@@ -611,7 +613,8 @@ def terms(
     target: Path = typer.Argument(Path("data/work/re0-v43"), help="工作目录或 .db 路径"),
     min_count: int = typer.Option(3, "--min-count", help="候选词最少出现次数"),
     top: int = typer.Option(400, "--top", help="最多输出多少条候选"),
-    out: Path | None = typer.Option(None, "--out", "-o", help="输出 TSV（默认 <workdir>/terms.candidates.tsv）"),
+    out: Path | None = typer.Option(None, "--out", "-o",
+                                    help="输出 TSV（默认 <workdir>/terms.candidates.tsv）"),
     no_kanji: bool = typer.Option(False, "--no-kanji", help="只抽片假名与引号短语（汉字噪声大）"),
 ) -> None:
     """⑧a 术语预扫描：抽候选人名/专有名词 → 你填译法 → 翻译时强制注入。"""

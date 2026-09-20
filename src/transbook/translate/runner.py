@@ -11,8 +11,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from transbook.store import db as store
 from transbook.textutil import is_untranslated
@@ -60,7 +60,8 @@ class RunReport:
             if self.still_untranslated:
                 extra += f"（仍原样 {self.still_untranslated}）"
         return (f"批次 {self.batches} ｜ 已译 {self.translated} ｜ 失败 {self.failed} ｜ "
-                f"重试补齐 {self.retried} ｜ token 入 {self.usage.tokens_in:,} / 出 {self.usage.tokens_out:,} ｜ "
+                f"重试补齐 {self.retried} ｜ "
+                f"token 入 {self.usage.tokens_in:,} / 出 {self.usage.tokens_out:,} ｜ "
                 f"花费 ¥{self.usage.cost:.4f}{extra}"
                 f"{' ｜ 停止原因: ' + self.stopped if self.stopped else ''}")
 

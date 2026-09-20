@@ -13,8 +13,12 @@
 
 from __future__ import annotations
 
-from transbook.ingest.pdf import (confirm_running_heads, find_margin_segments,
-                                  find_page_number_rows, is_page_number)
+from transbook.ingest.pdf import (
+    confirm_running_heads,
+    find_margin_segments,
+    find_page_number_rows,
+    is_page_number,
+)
 
 
 def rows(*items: tuple) -> list[tuple[str, float, float, float]]:
@@ -38,7 +42,7 @@ def test_is_page_number():
 # ── 判据 1：书眉（推进轴边缘 + 独一无二）────────────────────────────
 def test_footer_page_number_is_not_a_margin_candidate():
     """纯数字段不走书眉判据（由页码聚类处理），避免双重口径打架。"""
-    body = [("line %d" % i, 300.0 - i * 12) for i in range(20)]
+    body = [(f"line {i}", 300.0 - i * 12) for i in range(20)]
     page = hrows(*body) + [("4", 0.0, 42.0, 100.0)]
     assert find_margin_segments(page, vertical=False) == set()
 
@@ -48,7 +52,7 @@ def test_header_text_at_top_edge_is_candidate():
     page = hrows(("First body line", 300.0), ("second", 288.0), ("third", 276.0))
     assert find_margin_segments(page, vertical=False) == set()
     # 真的悬空在版心之外（与最近一行差 27，行距中位数 12）→ 候选
-    page = hrows(*[("line %d" % i, 300.0 - i * 12) for i in range(20)],
+    page = hrows(*[(f"line {i}", 300.0 - i * 12) for i in range(20)],
                  ("第三章　氷上決戦", 40.0))
     assert find_margin_segments(page, vertical=False) == {20}
 
@@ -76,7 +80,7 @@ def test_vertical_page_number_goes_to_the_number_rule():
 
 
 def test_long_text_in_margin_is_kept():
-    page = hrows(*[("line %d" % i, 300.0 - i * 12) for i in range(20)],
+    page = hrows(*[(f"line {i}", 300.0 - i * 12) for i in range(20)],
                  ("あ" * 60, 40.0))
     assert find_margin_segments(page, vertical=False) == set()
 
@@ -88,7 +92,7 @@ def test_tiny_page_is_ignored():
 
 # ── 判据 2：页码按 y 跨页聚类 ───────────────────────────────────────
 def _page(cross_y: float, text: str = "3") -> tuple[list[tuple[str, float, float, float]], float]:
-    body = [("line %d" % i, 0.0, 300.0 - i * 12, 100.0) for i in range(5)]
+    body = [(f"line {i}", 0.0, 300.0 - i * 12, 100.0) for i in range(5)]
     body.append((text, 0.0, cross_y, 300.0))
     return body, 10.0
 

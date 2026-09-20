@@ -19,7 +19,7 @@ from __future__ import annotations
 import posixpath
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from lxml import etree
@@ -58,7 +58,7 @@ def _opf(title: str, author: str, language: str, identifier: str,
     etree.SubElement(meta, f"{{{DC_NS}}}language").text = language or "zh"
     etree.SubElement(meta, f"{{{DC_NS}}}publisher").text = "transbook"
     m = etree.SubElement(meta, f"{{{OPF_NS}}}meta", property="dcterms:modified")
-    m.text = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    m.text = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     manifest = etree.SubElement(pkg, f"{{{OPF_NS}}}manifest")
     etree.SubElement(manifest, f"{{{OPF_NS}}}item", id="nav", href="nav.xhtml",

@@ -11,9 +11,15 @@ from __future__ import annotations
 import pytest
 
 from transbook.ingest.pdf import segments_to_paragraphs
-from transbook.textutil import (classify_matter, clean_paragraph,
-                                clean_pdf_text, is_cjk, join_wrapped,
-                                normalize_ligatures, squeeze_cjk_spaces)
+from transbook.textutil import (
+    classify_matter,
+    clean_paragraph,
+    clean_pdf_text,
+    is_cjk,
+    join_wrapped,
+    normalize_ligatures,
+    squeeze_cjk_spaces,
+)
 
 
 # ── 换行拼接 ────────────────────────────────────────────────────────

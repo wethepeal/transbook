@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """EPUB 结构探测（只用标准库）：为 M1 方案验证 + 规模/成本估算提供实测数据。"""
-import sys, os, re, zipfile, posixpath
-from xml.etree import ElementTree as ET
+import os
+import posixpath
+import re
+import sys
+import zipfile
 from html.parser import HTMLParser
+from xml.etree import ElementTree as ET
 
 NS = {
     "c": "urn:oasis:names:tc:opendocument:xmlns:container",

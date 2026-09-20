@@ -155,7 +155,7 @@ def check(path: str) -> dict:
             title_mismatch += 1
         rows.append(("✓" if same else "~", describe(el), title, href, body_text[:46]))
 
-    print(f"\n逐条验证（✓ 完全匹配 / ~ 文本不一致 / ✗ 失败）:")
+    print("\n逐条验证（✓ 完全匹配 / ~ 文本不一致 / ✗ 失败）:")
     for mark, dsc, title, href, body in rows:
         print(f"  {mark} {dsc:<34} NAV={title[:26]:<28} 正文={body!r}")
 

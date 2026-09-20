@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import pathlib
-import re
 import sys
 import urllib.request
 from xml.etree import ElementTree as ET

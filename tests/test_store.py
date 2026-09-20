@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from transbook.ir import Block, DocumentIR, DocMeta
+from transbook.ir import Block, DocMeta, DocumentIR
 from transbook.store import connect, import_ir, pending, record_translation, stats, text_hash_of
 
 

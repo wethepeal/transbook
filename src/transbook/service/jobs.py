@@ -40,7 +40,7 @@ def spawn(db_path: Path, root: Path, job_id: str) -> int | None:
         kwargs["stderr"] = subprocess.DEVNULL
     try:
         proc = subprocess.Popen(cmd, **kwargs)
-    except OSError as exc:
+    except OSError:
         return None
     return proc.pid
 

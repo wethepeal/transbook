@@ -162,7 +162,7 @@ def validate_epub(path: str | Path, *, run_epubcheck_check: bool = True) -> Vali
                                     f"<meta name=\"cover\"> 指向不存在的清单项：{meta_cover[0]}"))
 
         # ⑤ 逐文档：良构 + 引用可解析
-        for iid, it in items.items():
+        for it in items.values():
             if it["type"] not in ("application/xhtml+xml", "text/html"):
                 continue
             rep.xhtml += 1

@@ -27,11 +27,9 @@ jobs:
       - name: 同步依赖（严格按 uv.lock）
         run: uv sync --locked --group dev
 
-      # 存量告警还有 85 个（src 59 / tests 30），其中 23 个是 B008——
-      # Typer/FastAPI 的默认参数惯用法，属 ruff 误报。清理是独立的一件事，
-      # 在收拾干净之前这里**不阻断**，否则 CI 从第一天就是红的、没人会看。
-      - name: ruff 静态检查（信息性，暂不阻断）
-        continue-on-error: true
+      # 存量告警已清零（`tools/*` 按目录放宽了 UP031/E501/B007，理由见 pyproject.toml），
+      # 所以这一步是**阻断**的——从今往后新增告警会直接让 CI 变红。
+      - name: ruff 静态检查
         run: uv run ruff check .
 
       - name: pytest

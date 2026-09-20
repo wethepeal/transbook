@@ -105,9 +105,10 @@ def main() -> int:
             "SELECT status, COUNT(*) FROM segment GROUP BY status").fetchall())
         summary["cost"] = c.execute(
             "SELECT IFNULL(SUM(cost),0) FROM segment").fetchone()[0]
+        # 查询正好选两列，元组长度恒为 2；strict=True 把这层不变量变成断言
         summary["tokens"] = dict(zip(("in", "out"), c.execute(
             "SELECT IFNULL(SUM(tokens_in),0), IFNULL(SUM(tokens_out),0) "
-            "FROM segment").fetchone()))
+            "FROM segment").fetchone(), strict=True))
         try:
             summary["summaries"] = c.execute(
                 "SELECT COUNT(*) FROM chapter_summary").fetchone()[0]

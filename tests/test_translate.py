@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from transbook.ir import Block, DocumentIR, DocMeta
-from transbook.store import connect, import_ir, pending, stats
+from transbook.ir import Block, DocMeta, DocumentIR
+from transbook.store import connect, import_ir, stats
 from transbook.translate import (
     BookContext,
     DeepSeekProvider,
@@ -57,7 +57,9 @@ def test_parse_translations_bare_array():
 
 
 def test_parse_translations_invalid_raises():
-    with pytest.raises(Exception):
+    # `parse_translations` 的契约是**解析失败抛 ValueError**（json.JSONDecodeError 是其子类），
+    # 所以这里断言具体的 ValueError，而不是盲抓 Exception——否则它内部真出别的错也会"通过"。
+    with pytest.raises(ValueError):
         parse_translations("这不是 JSON")
 
 

@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from transbook.ingest import EpubError, PdfError, ingestor_for
 from transbook.ingest.preview import summarize, to_markdown

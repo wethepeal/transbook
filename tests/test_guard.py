@@ -57,7 +57,7 @@ def db(tmp_path):
 
 
 def _seed(db, texts):
-    from transbook.ir import Block, DocumentIR, DocMeta
+    from transbook.ir import Block, DocMeta, DocumentIR
 
     ir = DocumentIR(
         doc=DocMeta(id="doc", title="t", source_lang="ja", origin="epub"),
@@ -144,7 +144,7 @@ def test_format_error_is_retried(db):
     """
     from transbook.translate.deepseek import TranslationFormatError
 
-    ids = _seed(db, ["一段比较长的日文原文，用来触发批次。", "另一段日文原文。"])
+    _seed(db, ["一段比较长的日文原文，用来触发批次。", "另一段日文原文。"])
 
     class BadJsonOnce(FakeProvider):
         def __init__(self):
@@ -181,7 +181,7 @@ def test_format_error_gives_up_after_max_rounds(db):
 
 def test_network_error_does_not_retry_forever(db):
     """网络/鉴权错误重试没有意义，应立即判失败，别白等三轮。"""
-    ids = _seed(db, ["日文原文一段。"])
+    _seed(db, ["日文原文一段。"])
 
     class Boom(FakeProvider):
         def __init__(self):

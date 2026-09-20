@@ -18,16 +18,14 @@
 
 from __future__ import annotations
 
-import posixpath
 import re
 import statistics
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
 
-from transbook.ir import Block, DocumentIR, DocMeta, TocEntry
-from transbook.textutil import (classify_matter, clean_paragraph,
-                                clean_pdf_text, join_wrapped, normalize_ws)
+from transbook.ir import Block, DocMeta, DocumentIR, TocEntry
+from transbook.textutil import classify_matter, clean_paragraph, clean_pdf_text, join_wrapped, normalize_ws
 
 _WS = re.compile(r"[\s\u3000]+")
 _KANA = re.compile(r"[\u3041-\u309f\u30a1-\u30f6]")
@@ -185,8 +183,10 @@ def strip_inline_ruby(raw: str, boxes: list[tuple[float, float, float, float]],
             if _KANJI_CH.match(prev) or _KANJI_CH.match(nxt):
                 keep[i] = False
         k = e + 1
-    return ("".join(c for c, kp in zip(raw, keep) if kp),
-            [b for b, kp in zip(boxes, keep) if kp])
+    # 两处都是**并行数组**：入口已保证 len(raw)==len(boxes)，keep 与它们同长。
+    # 用 strict=True 把这条不变量变成断言——静默截断才是真正危险的那种 bug。
+    return ("".join(c for c, kp in zip(raw, keep, strict=True) if kp),
+            [b for b, kp in zip(boxes, keep, strict=True) if kp])
 
 
 def is_page_number(text: str) -> bool:
@@ -227,7 +227,7 @@ def find_margin_segments(rows: list[tuple[str, float, float, float]], *, vertica
     # 中位间距用**去重后**的坐标算：同列/同行的重复坐标会产生 0 间距，
     # 会把中位数拉到 0，使判据 2 失效。
     uniq = sorted(set(cs))
-    ugaps = [b - a for a, b in zip(uniq, uniq[1:]) if b - a > 0.01]
+    ugaps = [b - a for a, b in zip(uniq, uniq[1:], strict=False) if b - a > 0.01]
     if not ugaps:
         return set()
     med = statistics.median(ugaps)
@@ -378,11 +378,11 @@ class PdfIngestor:
         （横排 y / 竖排 x），页码看 y（实测跨页恒定）。
         """
         if vertical:
-            refs = [b[3] for b, c in zip(boxes, raw) if c.strip()]
+            refs = [b[3] for b, c in zip(boxes, raw, strict=True) if c.strip()]
             ref = max(refs) if refs else 0.0
             off_of = lambda b: ref - b[3]  # noqa: E731
         else:
-            refs = [b[0] for b, c in zip(boxes, raw) if c.strip()]
+            refs = [b[0] for b, c in zip(boxes, raw, strict=True) if c.strip()]
             ref = min(refs) if refs else 0.0
             off_of = lambda b: b[0] - ref  # noqa: E731
 
@@ -402,7 +402,7 @@ class PdfIngestor:
         # 行间空白 = 上一行底边 - 本行顶边（PDF 坐标 y 向上，故上一行 y 更大）
         gaps: list[float] = []
         if not vertical:
-            for (_, pa), (_, pb) in zip(raw_segs, raw_segs[1:]):
+            for (_, pa), (_, pb) in zip(raw_segs, raw_segs[1:], strict=False):
                 if pa and pb:
                     gaps.append(pa[1] - pb[3])
         med_gap = statistics.median(gaps) if gaps else 0.0
@@ -520,7 +520,7 @@ class PdfIngestor:
                           for rows, _h in rows_by_page]
             drop_texts = confirm_running_heads(
                 [[rows[i][0] for i in sorted(idx)]
-                 for idx, (rows, _h) in zip(candidates, rows_by_page)],
+                 for idx, (rows, _h) in zip(candidates, rows_by_page, strict=True)],
                 pages)
             num_rows = find_page_number_rows(rows_by_page, tol=PAGE_NUM_TOL)
             if self.filter_headers and (drop_texts or num_rows):

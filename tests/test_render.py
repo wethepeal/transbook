@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 
 from transbook.ingest import EpubIngestor
-from transbook.ir import Block, DocumentIR, DocMeta
+from transbook.ir import Block, DocMeta, DocumentIR
 from transbook.render import CSS, build_chapters, build_nav, write_epub
 
 

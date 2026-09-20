@@ -225,10 +225,9 @@ def test_skip_switch_does_not_pretend_to_pass(tmp_path):
 @pytest.mark.skipif(find_epubcheck() is None, reason="本机未装配 epubcheck")
 def test_epubcheck_runs_when_installed(tmp_path):
     """装了 epubcheck 就真的跑一遍——本项目的成品应零错误零警告。"""
+    from transbook.ir import Block, DocMeta, DocumentIR
     from transbook.render.epub import write_epub as _w
     from transbook.render.xhtml import CSS, build_chapters, build_nav
-
-    from transbook.ir import Block, DocumentIR, DocMeta
 
     ir = DocumentIR(doc=DocMeta(id="d", title="书", author="作者", source_lang="ja",
                                 origin="epub"),

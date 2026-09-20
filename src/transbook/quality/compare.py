@@ -16,7 +16,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from transbook.textutil import KANA_ANY, is_untranslated, normalize_ws
+from transbook.textutil import is_untranslated, normalize_ws
 from transbook.translate.base import (
     BookContext,
     SegmentIn,
