@@ -10,8 +10,10 @@
 * `\\r\\n` 是**列边界**，不是段落边界。
 * 段落靠 **列首字下げ**（首字下沉约一个字位）识别：实测 dy≈0 是续行、dy≈1 字是**新段落**、
   dy≫1 字是**振假名**或列中片段。
-* 竖排 PDF 的假名注音**内联在文字流里**（`尽くし難がたい`），无标记可剥——实测对翻译无碍
-  （与 EPUB 的 `<rt>` 等价），故保留并在 IR 里计数。
+* 竖排 PDF 的假名注音**内联在文字流里**（`尽くし難がたい`），**没有标记可依**，只能靠字号剥：
+  实测正文 `h≈12.2`、注音 `h≈6.1`（约一半）。**必须剥**——否则送进翻译的是被注音切碎的
+  日文（`手て強ごわい`、`効こう果か覿てき面めん`），与 EPUB 孪生版的精确命中率只有 58.9%。
+  见 `strip_inline_ruby`（连促音 `っ` 与标点 `、。` 都要区分开）。
 """
 
 from __future__ import annotations
@@ -110,6 +112,56 @@ def segments_to_paragraphs(segments: list[tuple[str, float]], h: float, *,
 _PAGE_NUM = re.compile(r"^[0-9０-９]{1,4}$|^[ivxlcIVXLC]{1,6}$")
 #: 页码 y 位置聚类的容差（PDF 单位）；同一页脚在各页上一般误差 < 2
 PAGE_NUM_TOL = 8.0
+
+_KANA_CH = re.compile(r"[\u3041-\u309f\u30a1-\u30f6]")
+_KANJI_CH = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+
+def strip_inline_ruby(raw: str, boxes: list[tuple[float, float, float, float]],
+                      h: float, *, ratio: float = 0.75
+                      ) -> tuple[str, list[tuple[float, float, float, float]]]:
+    """剥掉竖排 PDF 里**内联的振假名（ruby）**，返回新的 `(raw, boxes)`。
+
+    PDF 的振假名没有 `<rt>` 之类标记，只能靠**字号**认：实测正文 `h≈12.2`，
+    注音 `h≈6.1`（约一半）。但"矮"这一个条件远不够——同一页里
+    标点（`、` `。` h≈4.2）和促音（`っ` h≈7.4）也矮。所以要叠加三个条件：
+
+    * **只认假名**：标点直接排除；
+    * **连续 ≥2 个矮假名 → 注音**（实测 `がた`/`たたず` 这类注音从不单个出现，
+      而促音 `っ` 也从不连着自己）；
+    * **单个矮假名**只有**左右都是汉字**时才算注音（`手て強` 的 `て` 要删，
+      而 `却って` 的 `っ` 左边是汉字、右边是假名 → 保留）。
+
+    这一步很关键：不剥的话送进翻译的是 `手て強ごわい`、`効こう果か覿てき面めん`
+    这种被注音切碎的日文，会直接拉低译文质量（与 EPUB 路径剥离 `<rt>` 是同一件事）。
+    """
+    if not raw or not boxes or h <= 0 or len(raw) != len(boxes):
+        return raw, boxes
+    n = len(raw)
+    small = [False] * n
+    for i in range(n):
+        bh = boxes[i][3] - boxes[i][1]
+        small[i] = 0 < bh < h * ratio and bool(_KANA_CH.match(raw[i]))
+    keep = [True] * n
+    i = 0
+    while i < n:
+        if not small[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and small[j]:
+            j += 1
+        if j - i >= 2:
+            for k in range(i, j):
+                keep[k] = False
+        else:
+            prev = raw[i - 1] if i > 0 else ""
+            nxt = raw[j] if j < n else ""
+            if _KANJI_CH.match(prev) and _KANJI_CH.match(nxt):
+                keep[i] = False
+        i = j
+    return ("".join(c for c, k in zip(raw, keep) if k),
+            [b for b, k in zip(boxes, keep) if k])
 
 
 def is_page_number(text: str) -> bool:
@@ -217,17 +269,20 @@ class PdfStats:
     ruby_runs: int = 0
     bookmarks: int = 0
     headers_dropped: int = 0
+    ruby_stripped: int = 0
 
 
 class PdfIngestor:
     """把 PDF 解析成 DocumentIR。结构与 EPUB 路径共用同一套 Block/TocEntry。"""
 
     def __init__(self, path: str | Path, doc_id: str | None = None,
-                 min_chars_per_para: int = 1, filter_headers: bool = True) -> None:
+                 min_chars_per_para: int = 1, filter_headers: bool = True,
+                 strip_ruby: bool = True) -> None:
         self.path = Path(path)
         self.doc_id = doc_id
         self.min_chars = min_chars_per_para
         self.filter_headers = filter_headers
+        self.strip_ruby = strip_ruby
         self._seq = 0
         self.stats = PdfStats()
 
@@ -264,10 +319,15 @@ class PdfIngestor:
                 boxes.append((0.0, 0.0, 0.0, 0.0))
         h = char_height(boxes)
 
-        # 相邻字符位移（用于竖排判定）
+        # 相邻字符位移（用于竖排判定）——用**未剥注音**的原始字符算，样本更充分
         samples = []
         for i in range(1, min(n, 400)):
             samples.append((boxes[i][0] - boxes[i - 1][0], boxes[i][1] - boxes[i - 1][1]))
+
+        if self.strip_ruby:
+            before = len(raw)
+            raw, boxes = strip_inline_ruby(raw, boxes, h)
+            self.stats.ruby_stripped += before - len(raw)
         return raw, boxes, h, samples
 
     def _page_segments(self, raw: str, boxes: list[tuple[float, float, float, float]],

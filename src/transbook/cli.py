@@ -114,6 +114,8 @@ def extract(
     no_assets: bool = typer.Option(False, "--no-assets", help="不提取图片"),
     keep_headers: bool = typer.Option(False, "--keep-headers",
                                       help="不过滤页眉/页脚（PDF 页码、书眉）"),
+    keep_ruby: bool = typer.Option(False, "--keep-ruby",
+                                   help="不剥离 PDF 内联的振假名（注音）"),
     doc_id: str | None = typer.Option(None, "--doc-id", help="文档 ID（默认由书名生成短标识）"),
 ) -> None:
     """① 抽取：EPUB / PDF → DocumentIR(JSON) + Markdown 预览（人工检查闸门）。"""
@@ -128,8 +130,9 @@ def extract(
 
     out.mkdir(parents=True, exist_ok=True)
     try:
-        # `filter_headers` 只有 PDF 抽取器用得上；EPUB 路径忽略它（书里没有页码）
-        ing = ingestor_for(source, doc_id=doc_id, filter_headers=not keep_headers)
+        # `filter_headers` / `strip_ruby` 只有 PDF 抽取器用得上；EPUB 路径忽略
+        ing = ingestor_for(source, doc_id=doc_id,
+                           filter_headers=not keep_headers, strip_ruby=not keep_ruby)
         # EPUB 抽取器支持 assets_dir（提取图片）；PDF 抽取器暂不提取图片
         ir = (ing.extract(assets_dir=None if no_assets else out / "assets")
               if "assets_dir" in inspect.signature(ing.extract).parameters
@@ -153,6 +156,10 @@ def extract(
     if dropped:
         console.print(f"  [dim]已过滤页眉/页脚 {dropped} 段（页码、书眉）"
                       f"——要保留请加 --keep-headers[/dim]")
+    ruby = getattr(getattr(ing, "stats", None), "ruby_stripped", 0)
+    if ruby:
+        console.print(f"  [dim]已剥离内联振假名 {ruby} 字（PDF 注音无标记，按字号识别）"
+                      f"——要保留请加 --keep-ruby[/dim]")
 
 
 @app.command()

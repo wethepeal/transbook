@@ -14,11 +14,13 @@ from transbook.ingest.pdf import (
 )
 
 
-def ingestor_for(path, doc_id: str | None = None, *, filter_headers: bool = True):
+def ingestor_for(path, doc_id: str | None = None, *, filter_headers: bool = True,
+                 strip_ruby: bool = True):
     """按扩展名选择抽取器（EPUB 优先——结构由作者标注，质量天然高于 PDF 版面推断）。
 
-    `filter_headers` 只对 PDF 有意义（书里没有页码），故显式声明而不是走 `**kwargs`：
-    走 `**kwargs` 时 `inspect.signature` 查不到该参数，CLI 的开关会被静默忽略（踩过）。
+    `filter_headers` / `strip_ruby` 只对 PDF 有意义（EPUB 的注音是 `<rt>`，走结构剥离），
+    故显式声明而不是走 `**kwargs`：走 `**kwargs` 时 `inspect.signature` 查不到这些参数，
+    CLI 的开关会被静默忽略（踩过）。
     """
     from pathlib import Path
 
@@ -26,7 +28,8 @@ def ingestor_for(path, doc_id: str | None = None, *, filter_headers: bool = True
     if suffix == ".epub":
         return EpubIngestor(path, doc_id=doc_id)
     if suffix == ".pdf":
-        return PdfIngestor(path, doc_id=doc_id, filter_headers=filter_headers)
+        return PdfIngestor(path, doc_id=doc_id, filter_headers=filter_headers,
+                           strip_ruby=strip_ruby)
     raise ValueError(f"不支持的输入格式：{suffix}（目前支持 .epub / .pdf）")
 
 
