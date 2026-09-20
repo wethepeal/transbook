@@ -115,53 +115,78 @@ PAGE_NUM_TOL = 8.0
 
 _KANA_CH = re.compile(r"[\u3041-\u309f\u30a1-\u30f6]")
 _KANJI_CH = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+#: 判定注音相邻关系时要跳过的空白（含换行——竖排里换行就是列边界）
+_WS_CHARS = "\r\n\t \u3000\x0b\x0c\u00a0"
 
 
 def strip_inline_ruby(raw: str, boxes: list[tuple[float, float, float, float]],
-                      h: float, *, ratio: float = 0.75
+                      h: float, *, ratio: float = 0.75, strong: float = 0.56
                       ) -> tuple[str, list[tuple[float, float, float, float]]]:
     """剥掉竖排 PDF 里**内联的振假名（ruby）**，返回新的 `(raw, boxes)`。
 
-    PDF 的振假名没有 `<rt>` 之类标记，只能靠**字号**认：实测正文 `h≈12.2`，
-    注音 `h≈6.1`（约一半）。但"矮"这一个条件远不够——同一页里
-    标点（`、` `。` h≈4.2）和促音（`っ` h≈7.4）也矮。所以要叠加三个条件：
+    PDF 的振假名没有 `<rt>` 之类标记，只能靠**字号**认。全书假名字高比
+    （`height / 页面正文中位数`）实测呈三个峰，分界很清楚：
 
-    * **只认假名**：标点直接排除；
-    * **连续 ≥2 个矮假名 → 注音**（实测 `がた`/`たたず` 这类注音从不单个出现，
-      而促音 `っ` 也从不连着自己）；
-    * **单个矮假名**只有**左右都是汉字**时才算注音（`手て強` 的 `て` 要删，
-      而 `却って` 的 `っ` 左边是汉字、右边是假名 → 保留）。
+    ============  ==========  ==========================================
+    类别           比值        处理
+    ============  ==========  ==========================================
+    振假名         0.40~0.55   删（峰值 0.5，约 3700 字）
+    促音 `っ`      0.60~0.67   留（中位 0.61，2418 字）
+    小写假名       0.80~0.85   留（`ゃゅょぁぇ` 等）
+    ============  ==========  ==========================================
+
+    因此用**双阈值**，两个坑都要绕开：
+
+    * 宽阈值（0.75，`ratio`）只对**成串**矮假名生效——注音极少单字成串，
+      而促音从不连着自己，所以"连续 ≥2 个"这个条件本身就足够安全；
+    * 严阈值（0.56，`strong`）才允许删**单个**矮假名，且要求紧邻汉字
+      （`学び舎やとして` 的 `や`、`逸理りを` 的 `り`）。
+      促音比值 0.60+ 落在严阈值之外，所以 `却って` 的 `っ` 不会被误删
+      ——这正是"左右都必须是汉字"那种硬规则做不到的。
 
     这一步很关键：不剥的话送进翻译的是 `手て強ごわい`、`効こう果か覿てき面めん`
-    这种被注音切碎的日文，会直接拉低译文质量（与 EPUB 路径剥离 `<rt>` 是同一件事）。
+    这种被注音切碎的日文（与 EPUB 路径剥离 `<rt>` 是同一件事）。
     """
     if not raw or not boxes or h <= 0 or len(raw) != len(boxes):
         return raw, boxes
     n = len(raw)
-    small = [False] * n
-    for i in range(n):
-        bh = boxes[i][3] - boxes[i][1]
-        small[i] = 0 < bh < h * ratio and bool(_KANA_CH.match(raw[i]))
-    keep = [True] * n
-    i = 0
-    while i < n:
-        if not small[i]:
-            i += 1
+    # **必须先剔除空白再判相邻**：竖排 PDF 里注音与基字之间常常正好是一个列边界
+    # （`舎` `\r\n` `や` `\r\n` `と`）。直接看 raw[i-1] 会看到换行符而非汉字，
+    # "紧邻汉字"判据就永远不成立（实测 `学び舎やとして` 就是这么漏掉的）。
+    pos = [i for i in range(n) if raw[i] not in _WS_CHARS]
+    m = len(pos)
+    small: dict[int, bool] = {}
+    strong_small: dict[int, bool] = {}
+    for i in pos:
+        if not _KANA_CH.match(raw[i]):
             continue
-        j = i
-        while j < n and small[j]:
-            j += 1
-        if j - i >= 2:
-            for k in range(i, j):
-                keep[k] = False
-        else:
-            prev = raw[i - 1] if i > 0 else ""
-            nxt = raw[j] if j < n else ""
-            if _KANJI_CH.match(prev) and _KANJI_CH.match(nxt):
+        bh = boxes[i][3] - boxes[i][1]
+        if bh <= 0:
+            continue
+        small[i] = bh < h * ratio
+        strong_small[i] = bh < h * strong
+
+    keep = [True] * n
+    k = 0
+    while k < m:
+        i = pos[k]
+        if not small.get(i):
+            k += 1
+            continue
+        e = k
+        while e + 1 < m and small.get(pos[e + 1]):  # 成串：允许跨换行
+            e += 1
+        if e - k + 1 >= 2:
+            for x in range(k, e + 1):
+                keep[pos[x]] = False
+        elif strong_small.get(i):
+            prev = raw[pos[k - 1]] if k > 0 else ""
+            nxt = raw[pos[e + 1]] if e + 1 < m else ""
+            if _KANJI_CH.match(prev) or _KANJI_CH.match(nxt):
                 keep[i] = False
-        i = j
-    return ("".join(c for c, k in zip(raw, keep) if k),
-            [b for b, k in zip(boxes, keep) if k])
+        k = e + 1
+    return ("".join(c for c, kp in zip(raw, keep) if kp),
+            [b for b, kp in zip(boxes, keep) if kp])
 
 
 def is_page_number(text: str) -> bool:

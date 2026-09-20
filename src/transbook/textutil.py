@@ -130,8 +130,31 @@ def clean_pdf_text(s: str) -> str:
 
 
 def clean_paragraph(s: str) -> str:
-    """整段定稿清洗：去掉行内残留的软连字符/零宽字符。"""
-    return strip_soft_hyphen(normalize_ws(s))
+    """整段定稿清洗：去掉行内残留的软连字符/零宽字符，并压掉 CJK 之间的空格。"""
+    return squeeze_cjk_spaces(strip_soft_hyphen(normalize_ws(s)))
+
+
+#: 日文语境下"两侧都不该有空格"的字符：汉字、假名、CJK 标点、全角符号、破折号/框线
+#: （`──` 是 U+2015，必须单列，否则 `「── 星」` 这类空格压不掉）
+_CJK_EDGE = (r"\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
+             r"\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6"
+             r"\u2010-\u2015\u2025\u2026\u2500-\u257f")
+_CJK_SPACE = re.compile(f"(?<=[{_CJK_EDGE}])[ \\u3000]+(?=[{_CJK_EDGE}])")
+
+
+def squeeze_cjk_spaces(s: str) -> str:
+    """压掉**两侧都是 CJK** 时的空格。
+
+    PDF 的文字层常把标点/破折号拆成独立文本段，抽出来就多出空格
+    （`「── 星が悪かったんだよ」`），而 EPUB 孪生版写的是 `「──星が…」`；
+    剥离振假名后也会在原地留下一个空格（`愛 でないと`）。
+    日文本来不在汉字/假名/标点之间加空格，所以这类空格都是抽取噪声。
+
+    只在**两侧都属于日文书写系统**时压缩：`英語 の 混在` 这种拉丁与 CJK 之间的空格保留。
+    """
+    if not s or " " not in s and "\u3000" not in s:
+        return s
+    return _CJK_SPACE.sub("", s)
 
 
 # ── 前后附页归类（M2）───────────────────────────────────────────────

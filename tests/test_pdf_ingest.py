@@ -67,7 +67,7 @@ def test_segments_to_paragraphs_real_page19():
     assert len(paras) == 4
     assert paras[0] == "プロローグ『夢の終わり』──夢の城に帰り着いた"
     assert paras[1] == "既知の光景、既知の芳香ぬくもり。"
-    assert paras[2] == "「──── 」"
+    assert paras[2] == "「────」", "CJK 之间的空格是 PDF 抽取噪声，须压掉（EPUB 真值即无空格）"
     assert paras[3] == "まさしく、文字通り"
 
 

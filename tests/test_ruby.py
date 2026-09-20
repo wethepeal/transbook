@@ -14,6 +14,7 @@ BASE = (0.0, 0.0, 1.0, 12.0)      # 正文：高 12
 RUBY = (0.0, 0.0, 1.0, 6.0)       # 注音：高 6（约一半）
 PUNCT = (0.0, 0.0, 1.0, 4.0)      # 标点：高 4，更矮但不是假名
 TSU = (0.0, 0.0, 1.0, 7.4)        # 促音 っ：高 7.4
+WS = (0.0, 0.0, 0.0, 0.0)         # 空白 / 换行（列边界）
 
 
 def run(text: str, boxes: list) -> str:
@@ -56,6 +57,55 @@ def test_ruby_adjacent_to_punctuation():
     boxes = [BASE, BASE, BASE, BASE, RUBY, RUBY, BASE, PUNCT]
     assert len(boxes) == len(text)
     assert run(text, boxes) == "尽くし難い、"
+
+
+def test_single_ruby_followed_by_kana_is_removed():
+    """`学び舎やとして`：注音 `や` 后面直接跟正文假名 `と`。
+
+    这是旧规则漏掉的形态——旧规则要求单个矮假名"左右都是汉字"，
+    而这里右边是假名，于是 `舎や` 的注音一直留在正文里。
+    现在靠**严阈值 0.56** 把促音排除在外，单个注音就可以放宽为"紧邻汉字即可"。
+    """
+    boxes = [BASE, BASE, BASE, RUBY, BASE, BASE, BASE]  # 学 び 舎 や と し て
+    assert run("学び舎やとして", boxes) == "学び舎として"
+
+
+def test_tsu_kept_even_when_adjacent_to_kanji():
+    """`却って`：促音比值 0.61 落在严阈值 0.56 之外 → 即使紧邻汉字也保留。"""
+    assert run("却って", [BASE, TSU, BASE]) == "却って"
+
+
+def test_single_ruby_separated_by_column_break_is_removed():
+    """真实竖排实况：注音与基字之间**正好夹着一个列边界**。
+
+    `舎` `\\r\\n` `や` `\\r\\n` `と` —— 直接看 `raw[i-1]` 只会看到换行符，
+    于是"紧邻汉字"永远不成立。这正是实测漏掉 `学び舎やとして` 的原因。
+    """
+    text = "舎\r\nや\r\nと"
+    boxes = [BASE, WS, WS, RUBY, WS, WS, BASE]
+    assert len(boxes) == len(text)
+    out, _ = strip_inline_ruby(text, boxes, H)
+    assert "や" not in out
+    assert out.startswith("舎") and out.endswith("と")
+
+
+def test_ruby_run_across_column_break_is_removed():
+    """`難` `\\r\\n` `が` `\\r\\n` `た` `\\r\\n` `い`：跨列边界的成串注音一起删。"""
+    text = "難\r\nが\r\nた\r\nい"
+    boxes = [BASE, WS, WS, RUBY, WS, WS, RUBY, WS, WS, BASE]
+    assert len(boxes) == len(text)
+    out, _ = strip_inline_ruby(text, boxes, H)
+    assert "が" not in out and "た" not in out
+    assert out.startswith("難") and out.endswith("い")
+
+
+def test_tsu_across_column_break_is_kept():
+    """跨列边界的促音（比值 0.61 ≥ 严阈值）不能被误删。"""
+    text = "だ\r\nっ\r\nた"
+    boxes = [BASE, WS, WS, TSU, WS, WS, BASE]
+    assert len(boxes) == len(text)
+    out, _ = strip_inline_ruby(text, boxes, H)
+    assert "っ" in out
 
 
 def test_boxes_stay_in_sync():

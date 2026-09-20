@@ -13,7 +13,7 @@ import pytest
 from transbook.ingest.pdf import segments_to_paragraphs
 from transbook.textutil import (classify_matter, clean_paragraph,
                                 clean_pdf_text, is_cjk, join_wrapped,
-                                normalize_ligatures)
+                                normalize_ligatures, squeeze_cjk_spaces)
 
 
 # ── 换行拼接 ────────────────────────────────────────────────────────
@@ -80,6 +80,26 @@ def test_clean_pdf_text_keeps_trailing_soft_hyphen():
     """软连字符必须留到拼接阶段，否则跨行断词会被拆成两个词。"""
     assert clean_pdf_text("trans\u00ad") == "trans\u00ad"
     assert clean_paragraph("trans\u00ad lation") == "trans lation"
+
+
+# ── CJK 之间的空格压缩 ──────────────────────────────────────────────
+def test_squeeze_space_between_cjk():
+    """PDF 常把破折号拆成独立文本段，抽出来多一个空格；日文本来不加空格。"""
+    assert squeeze_cjk_spaces("「── 星が悪かったんだよ」") == "「──星が悪かったんだよ」"
+    assert squeeze_cjk_spaces("愛 でないと") == "愛でないと"
+    assert squeeze_cjk_spaces("静けさを 愛でないと") == "静けさを愛でないと"
+
+
+def test_squeeze_keeps_space_around_latin():
+    """拉丁与 CJK 之间的空格是排版需要，必须保留。"""
+    assert squeeze_cjk_spaces("Web サイト") == "Web サイト"
+    assert squeeze_cjk_spaces("第 3 章") == "第 3 章"
+    assert squeeze_cjk_spaces("hello world") == "hello world"
+
+
+def test_squeeze_noop_on_clean_text():
+    assert squeeze_cjk_spaces("日本語のテキスト。") == "日本語のテキスト。"
+    assert squeeze_cjk_spaces("") == ""
 
 
 # ── 横排段落还原 ────────────────────────────────────────────────────
