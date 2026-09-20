@@ -38,8 +38,17 @@ export default function JobProgress({ jobId, onDone, compact = false }: Props) {
         <span className="job-stage">{job?.stage ?? '等待中…'}</span>
         <span className="job-pct">{pct}%</span>
       </div>
-      <div className="bar">
-        <div className={`bar-fill ${status}`} style={{ width: `${pct}%` }} />
+      {/* 进度用 transform: scaleX 而不是 width：width 每帧触发布局重排，
+          transform 走合成层。外层 overflow:hidden 保证它仍表现为"从左往右长"。 */}
+      <div
+        className="bar"
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="作业进度"
+      >
+        <div className={`bar-fill ${status}`} style={{ transform: `scaleX(${pct / 100})` }} />
       </div>
       {!compact && job?.error && <pre className="job-error">{job.error}</pre>}
       {!compact && job?.message && !job.error && (

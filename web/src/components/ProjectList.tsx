@@ -58,9 +58,20 @@ export default function ProjectList({ onError }: Props) {
           </button>
         </h2>
         {loading ? (
-          <p className="hint">加载中…</p>
+          /* 骨架屏而不是"加载中…"三个字：形状贴近真实内容，
+             界面不会在数据到达时整体跳一下 */
+          <div aria-hidden="true">
+            <div className="skeleton skeleton-row" />
+            <div className="skeleton skeleton-row" />
+            <div className="skeleton skeleton-row" />
+          </div>
         ) : projects.length === 0 ? (
-          <p className="hint">还没有项目，上传一本书试试。</p>
+          <div className="empty">
+            <strong>还没有项目</strong>
+            <p className="empty-hint">
+              用上面的表单上传一个 EPUB 或 PDF，流水线会自动跑抽取、入库、翻译与渲染。
+            </p>
+          </div>
         ) : (
           <table className="table">
             <thead>
@@ -75,7 +86,7 @@ export default function ProjectList({ onError }: Props) {
             <tbody>
               {projects.map((p) => (
                 <tr key={p.doc_id}>
-                  <td className="nowrap">
+                  <td className="name nowrap">
                     <a href={`#/p/${encodeURIComponent(p.doc_id)}`}>{p.doc_id}</a>
                   </td>
                   <td className="nowrap">
@@ -101,7 +112,12 @@ export default function ProjectList({ onError }: Props) {
                     )}
                   </td>
                   <td className="right nowrap">
-                    <a className="btn small" href={`#/p/${encodeURIComponent(p.doc_id)}/review`}>
+                    {/* 行内次级操作：用 ghost 而不是实心强调色。
+                        五行实心按钮会糊成一堵蓝墙，把项目名都压没了。 */}
+                    <a
+                      className="btn small ghost"
+                      href={`#/p/${encodeURIComponent(p.doc_id)}/review`}
+                    >
                       校对
                     </a>
                   </td>

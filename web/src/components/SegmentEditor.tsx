@@ -128,13 +128,20 @@ export default function SegmentEditor({ docId, onError }: Props) {
         {/* 控件与计数**分两行**：混在一行时窗口一窄就会把按钮挤到第二行、
             左半边空着，看着像坏了。控件行只放控件，计数另起一行更稳定。 */}
         <div className="row toolbar">
+          {/* placeholder 不是可访问名——屏幕阅读器读不到"搜索原文或译文…"，
+              所以两个控件都补 aria-label */}
           <input
             className="search"
             placeholder="搜索原文或译文…"
+            aria-label="搜索原文或译文"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <select
+            value={status}
+            aria-label="按译文状态筛选"
+            onChange={(e) => setStatus(e.target.value)}
+          >
             <option value="">全部状态</option>
             <option value="done">已译</option>
             <option value="pending">待译</option>
@@ -151,16 +158,49 @@ export default function SegmentEditor({ docId, onError }: Props) {
             </button>
           </div>
         </div>
-        <div className="hint small toolbar-info">
-          共 {total} 段 ｜ 本页 {items.length} 段 ｜ 未保存{' '}
-          <b className={changed.length ? 'warn' : ''}>{changed.length}</b>
+        {/* 计数与翻页放同一行、分列两端。翻页原本只在页面最底部，
+            一本书 80 多页时每次换页都要滚到底——工具栏是吸顶的，
+            放这里才真正"随手可得"。 */}
+        <div className="toolbar-info">
+          <span className="hint small">
+            共 {total} 段 ｜ 本页 {items.length} 段 ｜ 未保存{' '}
+            <b className={changed.length ? 'warn' : ''}>{changed.length}</b>
+          </span>
+          <span className="toolbar-pager">
+            <button
+              className="ghost tiny"
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE))}
+            >
+              上一页
+            </button>
+            <span className="hint small nowrap">
+              第 {curPage} / {pages} 页
+            </span>
+            <button
+              className="ghost tiny"
+              disabled={offset + PAGE >= total}
+              onClick={() => setOffset(offset + PAGE)}
+            >
+              下一页
+            </button>
+          </span>
         </div>
       </section>
 
       {loading ? (
-        <p className="hint">载入中…</p>
+        <div className="stack" aria-hidden="true">
+          <div className="skeleton" style={{ height: 92 }} />
+          <div className="skeleton" style={{ height: 92 }} />
+          <div className="skeleton" style={{ height: 92 }} />
+        </div>
       ) : items.length === 0 ? (
-        <p className="hint">没有匹配的段落。</p>
+        <div className="empty">
+          <strong>没有匹配的段落</strong>
+          <p className="empty-hint">
+            {query || status ? '换个关键词，或把状态筛选改回「全部状态」。' : '这本书还没有可校对的段落。'}
+          </p>
+        </div>
       ) : (
         <div className="segments">
           {items.map((it) => {

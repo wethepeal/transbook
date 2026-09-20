@@ -50,7 +50,20 @@ export default function ProjectDetail({ docId, onError }: Props) {
     }
   }
 
-  if (!book) return <p className="hint">加载中…</p>
+  if (!book) {
+    return (
+      <div className="stack">
+        <section className="card">
+          <div className="skeleton" style={{ height: 24, width: 260, marginBottom: 16 }} />
+          <div className="stats" aria-hidden="true">
+            {Array.from({ length: 8 }, (_, i) => (
+              <div key={i} className="skeleton skeleton-stat" />
+            ))}
+          </div>
+        </section>
+      </div>
+    )
+  }
   const ir = book.ir
   const st = book.stats
 
@@ -92,23 +105,51 @@ export default function ProjectDetail({ docId, onError }: Props) {
 
       <section className="card">
         <h2>操作</h2>
+        {/* 主次分明：真翻译是这一页的主线动作，用实心强调色；其余同级。
+            「试跑」单列到分隔线右边——它是开发用的，而且**会往翻译记忆库里
+            写 `[译]原文` 这种假译文**，之后真翻译可能复用它们。摆在真翻译旁边
+            等权重太容易误点。 */}
         <div className="row actions">
-          <button disabled={!!busy || !!active} onClick={() => void start('translate', { engine: 'deepseek' })}>
-            翻译（DeepSeek）
-          </button>
-          <button disabled={!!busy || !!active} onClick={() => void start('translate', { engine: 'fake' })}>
-            翻译（Fake）
-          </button>
-          <button disabled={!!busy || !!active} onClick={() => void start('summarize')}>
-            生成滚动摘要
-          </button>
-          <button disabled={!!busy || !!active} onClick={() => void start('render', { mode: 'bilingual', to: 'both' })}>
-            渲染（双语 · EPUB+PDF）
-          </button>
-          <button disabled={!!busy || !!active} onClick={() => void start('render', { mode: 'zh', to: 'both' })}>
-            渲染（纯中文 · EPUB+PDF）
-          </button>
+          <div className="action-group">
+            <button
+              className="primary"
+              disabled={!!busy || !!active}
+              onClick={() => void start('translate', { engine: 'deepseek' })}
+            >
+              翻译（DeepSeek）
+            </button>
+            <button disabled={!!busy || !!active} onClick={() => void start('summarize')}>
+              生成滚动摘要
+            </button>
+            <button
+              disabled={!!busy || !!active}
+              onClick={() => void start('render', { mode: 'bilingual', to: 'both' })}
+            >
+              渲染（双语 · EPUB+PDF）
+            </button>
+            <button
+              disabled={!!busy || !!active}
+              onClick={() => void start('render', { mode: 'zh', to: 'both' })}
+            >
+              渲染（纯中文 · EPUB+PDF）
+            </button>
+          </div>
+          <span className="action-sep" aria-hidden="true" />
+          <div className="action-group">
+            <button
+              className="ghost"
+              disabled={!!busy || !!active}
+              onClick={() => void start('translate', { engine: 'fake' })}
+              title="不调用 API，用假译文跑通流程。写入的是 [译]原文，会进翻译记忆库"
+            >
+              试跑（Fake 引擎）
+            </button>
+          </div>
         </div>
+        <p className="hint small">
+          试跑只用来验证流程是否通，不花钱；它写入的假译文会进翻译记忆库，
+          正式翻译前建议对同一本书用「翻译（DeepSeek）」覆盖。
+        </p>
         {active && (
           <div className="active-job">
             <JobProgress jobId={active} onDone={() => void refresh()} />
@@ -122,17 +163,23 @@ export default function ProjectDetail({ docId, onError }: Props) {
       <section className="card">
         <h2>
           产物
-          <a className="btn small" href={`#/p/${encodeURIComponent(docId)}/review`}>
+          <a className="btn small ghost" href={`#/p/${encodeURIComponent(docId)}/review`}>
             进入段落校对
           </a>
         </h2>
         {book.outputs.length === 0 ? (
-          <p className="hint">还没有产物，先跑一次渲染。</p>
+          <div className="empty">
+            <strong>还没有产物</strong>
+            <p className="empty-hint">
+              先在上面跑一次渲染，双语版与纯中文版的 EPUB / PDF 会出现在这里。
+            </p>
+          </div>
         ) : (
           <ul className="files">
             {book.outputs.map((f) => (
               <li key={f}>
-                <a className="btn small" href={api.outputUrl(docId, f)}>
+                {/* 同样用 ghost：四行实心强调色会和上面的主按钮抢注意力 */}
+                <a className="btn small ghost" href={api.outputUrl(docId, f)}>
                   下载
                 </a>
                 <span className="mono small">{f}</span>
@@ -150,9 +197,12 @@ export default function ProjectDetail({ docId, onError }: Props) {
         <h2>最近作业</h2>
         {/* 空表只剩表头会显得像坏了，给一句说明 */}
         {jobs.length === 0 ? (
-          <p className="hint">
-            这个项目还没有作业记录（用命令行跑的作业不会登记到界面里）。
-          </p>
+          <div className="empty">
+            <strong>还没有作业记录</strong>
+            <p className="empty-hint">
+              在这里提交的作业会登记到界面里；用命令行跑的不会。
+            </p>
+          </div>
         ) : (
           <table className="table">
             <thead>

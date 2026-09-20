@@ -45,16 +45,21 @@ export default function UploadForm({ onUploaded, onError }: Props) {
         支持 EPUB / PDF。上传后自动跑完整流水线：抽取 → 入库 → 翻译 → 渲染，
         作业在后台子进程里执行，关掉页面也不会中断。
       </p>
-      <div className="row">
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".epub,.pdf"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          required
-        />
-      </div>
-      <div className="row">
+      {/* 字段排成一行、按钮对齐到控件底边。原来拆成两行、各自只占卡片左侧
+          三分之一，右边一大片空白，看着像页面没做完。 */}
+      <div className="row upload-fields">
+        {/* 包进 label 才有可访问名——原生文件控件自己那个"选择文件"按钮
+            对屏幕阅读器来说是空的，光有一个控件说明不了要选什么 */}
+        <label>
+          选择文件（EPUB / PDF）
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".epub,.pdf"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            required
+          />
+        </label>
         <label>
           项目名（可留空，默认取书名）
           <input
@@ -79,10 +84,10 @@ export default function UploadForm({ onUploaded, onError }: Props) {
             <option value="zh">纯中文（终版）</option>
           </select>
         </label>
+        <button type="submit" disabled={!file || busy}>
+          {busy ? '上传中…' : '上传并开始翻译'}
+        </button>
       </div>
-      <button type="submit" disabled={!file || busy}>
-        {busy ? '上传中…' : '上传并开始翻译'}
-      </button>
     </form>
   )
 }

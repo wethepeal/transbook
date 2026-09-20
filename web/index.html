@@ -3,7 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="transbook：把英/日文电子书翻成中文的流水线，在这里上传、看进度、逐段校对、下载成品。"
+    />
+    <!-- 告诉浏览器"这个界面本来就是深色的"：原生下拉列表、滚动条、日期选择器
+         都会跟着走深色，不再是我用 CSS 单独去补的那几处 -->
+    <meta name="color-scheme" content="dark" />
     <title>transbook · 电子书翻译流水线</title>
+    <!-- 图标内联成 SVG data URI：不额外发一个请求，也不引入二进制文件。
+         三条横线读作「文本」，16px 下仍然认得出。 -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171a21'/%3E%3Cpath d='M9 9h14M9 16h14M9 23h9' stroke='%237ea9e0' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
   </head>
   <body>
     <div id="root"></div>

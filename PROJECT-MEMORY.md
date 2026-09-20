@@ -286,6 +286,9 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | D-061 | 2026-09-21 | ✅ **Web 配置页**（`#/settings`）：填/换 DeepSeek API Key、接口地址、默认模型。新增 `GET/PUT /api/config`；`config.py` 抽出 `env_write_path()` / `set_env_values()` / `apply_env_values()`，CLI 的 `tp setup` 改为共用同一套实现 | 用户："部署后会离开当前开发环境丢失 api-key，所以需要方便配置" | 三条安全边界：① **密钥明文永不回前端**——接口只回打码串（实测响应体里搜不到明文）；② **留空 = 不修改**，清除必须是显式动作——否则用户只改模型、顺手点保存就会把密钥一起清掉；③ **只提交改动过的字段**，`.env` 里其它内容与注释原样保留。保存后**立即生效**：同时更新服务进程的环境变量并清 `load_dotenv` 缓存，作业子进程继承该环境且会重读盘上的 `.env`。**顺手修了两个既有可访问性缺陷**：输入框 `outline:none` 之后键盘焦点只剩 1px 边框变色（补 `:focus-visible` 2px 描边）；API Key 输入框的可访问名被并进了打码值、屏幕阅读器会念成"…当前 sk-045\*\*\*\*\*\*ba86"（把当前值移出 `<label>`）。真实浏览器实测：只改模型时密钥**字节级未变**（35→35，SHA256 前后一致） |
 | D-062 | 2026-09-21 | ✅ **引入 4 个第三方"网页/UI 设计"agent skill**，装在 `$DSH_HOME/skills`（用户级，对所有项目生效，watcher 热加载、无需重启）：`frontend-design`（anthropics/skills，Apache-2.0）、`redesign-existing-projects`（Leonxlnx/taste-skill，MIT）、`design-doctrine` + `a11y-audit`（plugin87/ux-ui-agent-skills，MIT） | 用户要求"找 GitHub 上热门、收藏较多的网页开发 skill，改善开发模式并达成更好的视觉效果" | 由后台子代理用 GitHub API 实测调研（星数、许可证、技能清单**全部来自工具返回**，未凭记忆）。**选型理由**：`frontend-design` 是最权威的"设计品味"提示词，且点名了 AI 味的具体特征；`redesign-existing-projects` 明确面向"改造既有项目、不换技术栈、不破坏功能"，正对后续的界面重构；`design-doctrine` + `a11y-audit` 是唯一带**验证纪律**的（不许报没测过的对比度数字、交互元素必须有八态、WCAG 2.2 新增项）。**明确排除**：`superdesigndev/superdesign-skill`（只是托管 SaaS CLI 的壳，要登录）、`bergside/awesome-design-skills`（69 个风格目录但正文是机器生成模板，降级为参考）、`ComposioHQ/awesome-claude-skills`（**根目录没有 LICENSE 文件**，按未授权对待）。**已知未验证**：`taste-skill/taste-skill/SKILL.md` 有 87 KB，抓取 4 次全部超时，内容未读——故未安装它，只装了 15 KB 的 `redesign-skill`。许可证随技能一起落地，来源与许可记在 `skills/SOURCES.md` |
 
+| D-063 | 2026-09-21 | ✅ **Web 界面重构第一轮（深色工作台精修）**。① 建立完整 token 层（颜色 / 圆角三档 / 字号七档 / 间距 / 动效 / 层级），组件里不再有硬编码 px；② 正文改**衬线**（`--font-book`）、数字改 `tabular-nums`；③ 进度条 `width` → `transform: scaleX`（不再触发布局重排）、补 `prefers-reduced-motion`。**无障碍**：skip link、未知路由 404、补全所有控件的可访问名、错误横幅 `role="alert"` 且可键盘关闭、导航当前位置。**状态**：骨架屏、空态、深色化的原生文件控件与下拉列表。**信息架构**：主次动作分离、校对页翻页移入吸顶工具栏 | 用户："现在使用 skill 可以重构网页端了"；方向选定「深色工作台精修 + 可调整信息架构 + 桌面优先」 | 全部改动**不动任何功能**。对比度**实测 10 组全部达标**（正文 15.42:1 / 次要 6.78:1 / 强调 7.16:1 / 按钮字 7.50:1 / 最弱 4.42:1）。**渲染后自查发现并修掉 5 个真实问题**：顶栏「配置」重复；打码值被标签行的 `space-between` 推到卡片右缘；列表与产物的实心按钮糊成"蓝墙"（改 ghost，把强调色留给唯一主操作）；skip link 压住 brand 文字（改整宽横条）；上传卡片右侧大片死白（字段铺满一行）。**明确不做**：grain / 视差 / 玻璃拟态等营销页手法——这是工作台，`design-doctrine` 自己把"用户需求 / 无障碍"排在"美观"之前 |
+| D-064 | 2026-09-21 | ⚠️ **一处真实隐患：界面上「试跑（Fake 引擎）」与真翻译原本并排等权重**。Fake 引擎写入的是 `[译]原文` 这种假译文，而且**会进翻译记忆库**，之后真翻译可能复用它们 | 重构时审 UI 发现 | 已把「试跑」单独放到分隔线右侧、改 ghost 外观，并在下方说明"会进翻译记忆库、正式翻译前建议覆盖"。**根治需要引擎侧配合**（Fake 的产物不应写入 TM），已记入 §8 待办 |
+
 ---
 
 ## 6. 任务板 / 里程碑
@@ -396,6 +399,8 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
       （`?` 会显示在 GitHub 上）。要改必须 rebase + 强推，会重写全部后续 SHA，需先确认
 - [x] ~~`build_compress_messages` 引用未定义的 `COMPRESS`~~ → 已补实现并接线（D-059）
 - [x] ~~仓库地址到手后上传 GitHub~~ → 已推送 `wethepeal/transbook`（D-060）
+- [ ] **Fake 引擎的假译文会写进翻译记忆库**（D-064）：界面上已做降级提示，但根治要改引擎侧——Fake 的产物不该进 TM，否则真翻译可能复用 `[译]原文`
+- [ ] 界面重构第二轮（可选）：详情页信息架构（现在是四张卡片纵向堆叠）、项目列表状态列偏宽
 
 ---
 
@@ -457,3 +462,5 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | 2026-09-21 | **代码上传 GitHub**（D-060）：本地 `master` 改名 `main` 接上 `wethepeal/transbook`（私有）；合并远端 Initial commit——保留 MIT LICENSE，`.gitignore` 取"上游模板 + 项目规则"、不做强推。远端核实：**30 个提交**、根目录 16 项齐全、两个 workflow 都在（说明 Workflows 权限够用）。记录两个环境坑：git 必须走系统代理 7897、harness 的 `%TEMP%` 每次调用不同 | agent |
 | 2026-09-21 | **补上 `COMPRESS` 实现**（D-059）：定义压缩提示词与 `compress_summary`，对超过每章预算 1.5 倍的摘要就地压一次（失败/变长则保留原样，用量并入记账）。仓库唯一的 F821 清零，ruff 总告警 85 → **80**。测试 295 → **301** 全绿 | agent |
 | 2026-09-21 | **Web 配置页 + 引入设计类 skill**（D-061、D-062）：新增 `#/settings` 与 `/api/config`（密钥脱敏返回、留空即不修改、只提交改动字段）；`config.py` 抽出发写 `.env` 的共用实现，`tp setup` 与 Web 共用。装 4 个第三方 UI 设计 skill 到 `$DSH_HOME/skills`（热加载生效）。修两个既有可访问性缺陷（键盘焦点圈、可访问名夹带打码值）。真实浏览器实测：只改模型时密钥 SHA256 前后一致。测试 301 → **312** 全绿 | agent |
+| 2026-09-21 | **配置页模型下拉框**：「默认模型」改为下拉（选项由后端下发，取自 DeepSeek 官方文档；保留「自定义」给本地端点），并改掉一处过时文案（`deepseek-chat` 已不在官方文档）。加防漂移测试：下拉里的模型必须在 `PRICES` 里有报价。测试 312 → **316** 全绿 | agent |
+| 2026-09-21 | **Web 界面重构第一轮**（D-063、D-064）：token 层落地、正文衬线、等宽数字、进度条改 transform、reduced-motion；skip link / 404 / 可访问名 / `role="alert"` / 导航当前位置；骨架屏与空态；主次动作分离、翻页移入吸顶工具栏。对比度实测 10 组全达标。渲染后自查修掉 5 处问题。测试 316 全绿，ruff 零告警 | agent |
