@@ -20,6 +20,7 @@ from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from transbook import config as cfg
 from transbook.ingest.epub import slugify
 from transbook.service import jobs as J
 from transbook.service import pipeline as P
@@ -30,6 +31,17 @@ from transbook.store import db as store
 SSE_INTERVAL = 0.4
 #: SSE 最长挂多久（秒），防止连接泄漏；到点会让客户端重连。
 SSE_MAX_SECONDS = 3600
+
+#: 配置页可编辑的项：(键名, 界面标签, 是否机密, 说明)。
+#: 机密项**永远不会把明文回传给前端**，只回显打码后的首尾。
+CONFIG_FIELDS: tuple[tuple[str, str, bool, str], ...] = (
+    ("DEEPSEEK_API_KEY", "DeepSeek API Key", True,
+     "翻译必需的密钥。去 platform.deepseek.com 申请；换机器/重新部署后要重新填。"),
+    ("DEEPSEEK_BASE_URL", "接口地址", False,
+     "留空用 DeepSeek 官方。填本地地址（如 http://127.0.0.1:8117/v1）即可改用本地模型。"),
+    ("TRANSLATE_MODEL", "默认模型", False,
+     "留空由引擎决定。常用 deepseek-flash（便宜快）/ deepseek-chat。"),
+)
 
 
 class JobRequest(BaseModel):
@@ -51,6 +63,25 @@ class SegmentPatch(BaseModel):
     final_translation: str | None = None
     #: 传 true 可把该段的定稿清空，回到机翻
     clear: bool = False
+
+
+class ConfigPatch(BaseModel):
+    """更新 `.env` 配置。
+
+    只提交**要改的键**；值为空串表示清空该项。刻意不做"整表覆盖"：
+    那样前端每次都得把密钥原样回传，明文来回多绕一圈没有意义。
+    """
+
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+def mask_secret(value: str) -> str:
+    """密钥只回显首尾——前端要能显示"已配置"，但不能拿到明文。"""
+    if not value:
+        return ""
+    if len(value) <= 10:
+        return "*" * len(value)
+    return f"{value[:6]}{'*' * 6}{value[-4:]}"
 
 
 def create_app(root: str | Path = P.DEFAULT_ROOT,
@@ -95,6 +126,52 @@ def create_app(root: str | Path = P.DEFAULT_ROOT,
     @app.get("/api/health")
     def health() -> dict[str, Any]:
         return {"status": "ok", "root": str(root), "db": str(service_db)}
+
+    # ── 配置（部署后换机器 / 重新填密钥用）──────────────────────────
+    @app.get("/api/config")
+    def get_config() -> dict[str, Any]:
+        """当前生效的配置。**机密项只回打码值**，绝不回明文。"""
+        path = cfg.env_write_path()
+        fields = []
+        for name, label, secret, hint in CONFIG_FIELDS:
+            raw = (cfg.get(name) or "").strip()
+            fields.append({
+                "name": name,
+                "label": label,
+                "hint": hint,
+                "secret": secret,
+                "is_set": bool(raw),
+                # 机密项连"值"都不给，前端只能拿到打码串
+                "value": "" if secret else raw,
+                "masked": mask_secret(raw) if secret else "",
+            })
+        return {
+            "env_file": str(path),
+            "env_file_exists": path.is_file(),
+            "fields": fields,
+            "active": {
+                "engine": (cfg.get("TRANSLATE_ENGINE") or "deepseek").strip(),
+                "model": (cfg.get("TRANSLATE_MODEL") or "").strip() or "（引擎默认）",
+                "key_set": bool((cfg.get("DEEPSEEK_API_KEY") or "").strip()),
+            },
+        }
+
+    @app.put("/api/config")
+    def put_config(patch: ConfigPatch) -> dict[str, Any]:
+        """写进 `.env` 并让**当前进程立刻生效**，不必重启服务。
+
+        作业在独立子进程里跑，它继承本进程的工作目录与环境变量，
+        所以改完立刻提交的作业也会用上新配置。
+        """
+        known = {name for name, *_ in CONFIG_FIELDS}
+        unknown = sorted(set(patch.values) - known)
+        if unknown:
+            raise HTTPException(400, f"不认识的配置项：{', '.join(unknown)}")
+        cleaned = {k: (v or "").strip() for k, v in patch.values.items()}
+        if not cleaned:
+            return {"ok": True, "changed": [], "env_file": str(cfg.env_write_path())}
+        path = cfg.apply_env_values(cleaned)
+        return {"ok": True, "changed": sorted(cleaned), "env_file": str(path)}
 
     @app.get("/api/projects")
     def list_projects() -> list[dict[str, Any]]:

@@ -72,8 +72,26 @@ export interface QaReport {
   issues: QaIssue[]
 }
 
-export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+export interface ConfigField {
+  name: string
+  label: string
+  hint: string
+  /** 机密项：后端只回打码串，`value` 恒为空 */
+  secret: boolean
+  is_set: boolean
+  value: string
+  masked: string
+}
 
+export interface ConfigView {
+  /** 配置会被写进哪个 .env（部署后换机器时，用户需要知道这个路径） */
+  env_file: string
+  env_file_exists: boolean
+  fields: ConfigField[]
+  active: { engine: string; model: string; key_set: boolean }
+}
+
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 export interface Job {
   id: string
   kind: string
@@ -110,6 +128,21 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => req<{ status: string; root: string }>('/api/health'),
+
+  config: () => req<ConfigView>('/api/config'),
+
+  /**
+   * 只提交**要改的键**；空串表示清空该项。
+   *
+   * 刻意不做整表覆盖：那样每次保存都得把密钥原样回传一遍，明文多绕一圈没意义，
+   * 而且用户只改模型时还有把密钥误清空的风险。
+   */
+  saveConfig: (values: Record<string, string>) =>
+    req<{ ok: boolean; changed: string[]; env_file: string }>('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    }),
 
   projects: () => req<Project[]>('/api/projects'),
 

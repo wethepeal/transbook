@@ -8,15 +8,18 @@ import { useEffect, useState } from 'react'
 import ProjectList from './components/ProjectList'
 import ProjectDetail from './components/ProjectDetail'
 import SegmentEditor from './components/SegmentEditor'
+import Settings from './components/Settings'
 
 export type Route =
   | { name: 'list' }
+  | { name: 'settings' }
   | { name: 'detail'; docId: string }
   | { name: 'review'; docId: string }
 
 export function parseHash(hash: string): Route {
   const path = hash.replace(/^#\/?/, '')
   const parts = path.split('/').filter(Boolean)
+  if (parts[0] === 'settings') return { name: 'settings' }
   if (parts[0] === 'p' && parts[1]) {
     const docId = decodeURIComponent(parts[1])
     return parts[2] === 'review' ? { name: 'review', docId } : { name: 'detail', docId }
@@ -26,6 +29,8 @@ export function parseHash(hash: string): Route {
 
 export function href(route: Route): string {
   switch (route.name) {
+    case 'settings':
+      return '#/settings'
     case 'detail':
       return `#/p/${encodeURIComponent(route.docId)}`
     case 'review':
@@ -53,7 +58,7 @@ export default function App() {
         </a>
         <span className="sub">电子书翻译流水线</span>
         <nav className="crumbs">
-          {route.name !== 'list' && (
+          {route.name !== 'list' && route.name !== 'settings' && (
             <>
               <a href="#/">项目</a>
               <span className="sep">/</span>
@@ -67,6 +72,14 @@ export default function App() {
             </>
           )}
         </nav>
+        {/* 配置是全局设置，从哪一页都该一步到达。放在右侧而不是面包屑里；
+            当前就在配置页时只改样式、不移除，避免链接位置跳动。
+            页面上也不再重复出现第二个「配置」面包屑。 */}
+        <a className={route.name === 'settings' ? 'nav-link current' : 'nav-link'}
+           href={href({ name: 'settings' })}
+           aria-current={route.name === 'settings' ? 'page' : undefined}>
+          配置
+        </a>
       </header>
 
       {error && (
@@ -77,6 +90,7 @@ export default function App() {
 
       <main>
         {route.name === 'list' && <ProjectList onError={setError} />}
+        {route.name === 'settings' && <Settings onError={setError} />}
         {route.name === 'detail' && <ProjectDetail docId={route.docId} onError={setError} />}
         {route.name === 'review' && <SegmentEditor docId={route.docId} onError={setError} />}
       </main>

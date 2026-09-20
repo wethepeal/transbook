@@ -21,7 +21,7 @@ from rich.console import Console
 from rich.table import Table
 
 from transbook import __version__
-from transbook.config import env_candidates, env_files_found, load_dotenv
+from transbook.config import apply_env_values, env_candidates, env_files_found, env_write_path, load_dotenv
 
 
 def _tolerate_unencodable_output() -> None:
@@ -822,25 +822,6 @@ def compare(
     console.print("\n[dim]质量指标只覆盖可判定问题；语义质量仍需人眼看上面几条对照。[/dim]")
 
 
-def _write_env_key(target: Path, key: str) -> None:
-    """把 `DEEPSEEK_API_KEY` 写进 `.env`，保留文件里其它内容。"""
-    lines = target.read_text(encoding="utf-8").splitlines() if target.is_file() else []
-    out: list[str] = []
-    replaced = False
-    for line in lines:
-        if line.strip().startswith("DEEPSEEK_API_KEY"):
-            out.append(f"DEEPSEEK_API_KEY={key}")
-            replaced = True
-        else:
-            out.append(line)
-    if not replaced:
-        if out and out[-1].strip():
-            out.append("")
-        out.append(f"DEEPSEEK_API_KEY={key}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(out) + "\n", encoding="utf-8")
-
-
 @app.command()
 def setup(
     key: str = typer.Option("", "--key", help="直接给出密钥，跳过交互询问"),
@@ -853,11 +834,7 @@ def setup(
     之所以把这件"要显示中文"的事从批处理挪到 Python：批处理文件里的中文在不同
     代码页下会乱码，而 Python 在 Windows 上走控制台 Unicode API，怎么都不会乱。
     """
-    existing = next((p for p in env_candidates() if p.is_file()), None)
-    if existing is None:
-        # 源码树里写项目根；装成 wheel 后 PROJECT_ROOT 不再是项目根，就写当前目录
-        root = PROJECT_ROOT if (PROJECT_ROOT / "pyproject.toml").is_file() else Path.cwd()
-        existing = root / ".env"
+    existing = env_write_path()
 
     load_dotenv()
     current = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
@@ -880,8 +857,8 @@ def setup(
         console.print(f"  以后补上：编辑 {existing}")
         return
 
-    _write_env_key(existing, key)
-    console.print(f"[green]已写入[/green] {existing}")
+    written = apply_env_values({"DEEPSEEK_API_KEY": key})
+    console.print(f"[green]已写入[/green] {written}")
 
 
 def _open_browser_soon(url: str, delay: float = 1.5) -> None:
