@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from transbook.translate.base import BookContext, SegmentIn
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 #: 护栏重试时追加到用户消息里的强指令。
 #: 实测模型偶发把长段原文原样返回（1/3216），此时**必须换更强的提示词**再试，
@@ -25,6 +25,8 @@ SYSTEM = """你是一名专业的{source_lang}→{target_lang}文学翻译。要
 3. 人名、地名、专有名词全书统一；严格遵循下方术语表。
 4. 保留原文中的数字、单位、符号与书名号/引号层级。
 5. 只输出 JSON，不要任何解释或 Markdown 代码块。
+6. 输出**简体中文**：不要繁体字，也不要保留日文汉字（`氷`→`冰`、`決戦`→`决战`）。
+   实测本地小模型常整段输出繁体（`一章『氷上決戰』`），务必避免。
 
 作品：{title}　作者：{author}
 文风要求：{style_hint}

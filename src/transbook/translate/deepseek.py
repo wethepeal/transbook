@@ -33,6 +33,8 @@ PRICES: dict[str, dict[str, float]] = {
 }
 #: 高峰时段 = 空闲 × 2（北京时间周一至周五 9-12、14-18，不含法定节假日）
 PEAK_MULTIPLIER = 2.0
+#: `price_tier="local"` 表示本地端点：不计费（`estimate_cost` 恒为 0）
+LOCAL_TIER = "local"
 
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 
@@ -93,6 +95,11 @@ class DeepSeekProvider(TranslationProvider):
         return PRICES.get(self.model, PRICES["deepseek-flash"])
 
     def estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
+        # 本地端点（llama.cpp / Ollama）走同一条 OpenAI 兼容协议，但**没有按量计费**——
+        # 只有电费。若沿用 DeepSeek 单价，对比表会把本地算成花钱，`--max-cost`
+        # 也会凭虚假费用提前停掉本地翻译（实测踩过）。
+        if self.price_tier == "local":
+            return 0.0
         p = self.price_of()
         rate = PEAK_MULTIPLIER if self.price_tier == "peak" else 1.0
         return (tokens_in / 1e6 * p["in_miss"] * rate) + (tokens_out / 1e6 * p["out"] * rate)

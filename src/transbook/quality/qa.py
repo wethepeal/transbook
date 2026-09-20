@@ -27,6 +27,20 @@ HIRAGANA = re.compile(r"[\u3041-\u309f]")
 KATAKANA = re.compile(r"[\u30a1-\u30f6]")
 #: 假名（平/片）——用于判断"是否真的需要翻译"
 KANA = re.compile(r"[\u3041-\u309f\u30a1-\u30f6]")
+#: **非简体**汉字 = 繁体专用字 + 日文专用汉字。
+#: 中文译文里成片出现，即是繁体输出或残留日文汉字——实测本地 Qwen3-8B 整段输出
+#: `一章『氷上決戰』`「異常事態」`那是他自認應該承擔的角色`，而这类问题
+#: **不含假名**，原来的"假名残留"检查完全抓不到。
+NON_SIMPLIFIED = frozenset(
+    "們這說時會對應該與學樣麼為國實際發現覺讓從來過開關門問間種見語話讀寫戰軍"
+    "隊將領點兒幾頭體認識記號產業務動區醫藥書車馬鳥魚龍風飛長東樂買賣錢銀鐵銅"
+    "錯題聽習經歷陽陰燈樹橋樓驚嚇媽愛願夢麗歡溫凍淨準確態總縣鄉萬億豐歲"
+    "紅綠藍黃筆紙張亂舊觀覽權議講論誰討謝遠邊靜盡層屬榮嚴寶獻"
+    # 日文专用汉字（简体与繁体都不用）
+    "氷駅沢浜畑峠辻込働榊畠嶋瀬麿凪雫咲"
+)
+# 注意：`姐妹暖黑` 这类字**简繁同形**，放进集合会制造误报（实测在真实成品上
+# 报了 5 条假警）。改动集合后务必跑 `tests/test_compare.py` 里的简繁回归测试。
 _WS = re.compile(r"[\s\u3000]+")
 
 ERROR, WARN = "error", "warn"
@@ -131,6 +145,12 @@ def check(conn: sqlite3.Connection, ir: DocumentIR | None = None,
             rep.add("kana_left", seg, f"译文残留平假名 {''.join(hir[:6])!r}：{tgt[:40]!r}")
         elif KATAKANA.search(tgt):
             rep.add("katakana_left", seg, f"译文残留片假名：{tgt[:40]!r}", WARN)
+
+        # ④b 繁体字 / 残留日文汉字。阈值 2：单个繁体字可能是刻意保留的人名用字。
+        trad = sorted({c for c in tgt if c in NON_SIMPLIFIED})
+        if len(trad) >= 2:
+            rep.add("traditional", seg,
+                    f"译文疑似繁体或残留日文汉字 {''.join(trad[:8])!r}：{tgt[:40]!r}", WARN)
 
         # ⑤ 术语一致性
         for term_src, term_tgt in (glossary or {}).items():

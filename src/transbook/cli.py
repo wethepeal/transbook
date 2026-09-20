@@ -317,7 +317,8 @@ def translate(
             key,
             model=model or default_model or "deepseek-flash",
             base_url=base_url or get("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL,
-            price_tier=price_tier,
+            # 本地端点不计费：沿用 API 单价会让成本护栏凭虚假费用提前停掉
+            price_tier="local" if engine == "local" else price_tier,
             extra_body=extra,
         )
     else:
@@ -694,6 +695,99 @@ def validate(
         bad += 1 if rep.errors else 0
     if bad and strict:
         raise typer.Exit(1)
+
+
+@app.command()
+def compare(
+    target: Path = typer.Argument(..., help="工作目录（含 book.ir.json）"),
+    chapter: int = typer.Option(0, "--chapter", help="只比这一章（0=全书按顺序取样）"),
+    limit: int = typer.Option(40, "--limit", help="最多比较多少段"),
+    engine_b: str = typer.Option("local", "--engine-b", help="对照引擎（默认本地）"),
+    model_b: str | None = typer.Option(None, "--model-b"),
+    base_url: str | None = typer.Option("http://127.0.0.1:8117/v1", "--base-url-b",
+                                        help="本地 OpenAI 兼容端点"),
+    engine_a: str = typer.Option("deepseek", "--engine-a"),
+    model_a: str | None = typer.Option(None, "--model-a"),
+    sample: int = typer.Option(4, "--sample", help="展示几条逐条对照"),
+    batch_items: int = typer.Option(16, "--batch-items"),
+    price_tier: str = typer.Option("idle", "--price-tier"),
+) -> None:
+    """⑪ 引擎对比：同一批段落跑两个引擎，看成本/速度/可判定质量。"""
+    from transbook.config import get
+    from transbook.ir import DocumentIR
+    from transbook.quality import compare as run_compare
+    from transbook.translate import BookContext, DeepSeekProvider
+    from transbook.translate.base import SegmentIn
+    from transbook.translate.deepseek import DEFAULT_BASE_URL
+    from transbook.translate.summary import chapter_spans
+
+    work = target if target.is_dir() else target.parent
+    ir_path = work / "book.ir.json"
+    if not ir_path.is_file():
+        console.print(f"[red]缺少 book.ir.json：{work}[/red]")
+        raise typer.Exit(1)
+    ir = DocumentIR.model_validate(json.loads(ir_path.read_text(encoding="utf-8")))
+
+    blocks = ir.translatable()
+    if chapter:
+        spans = [s for s in chapter_spans(ir) if s.index == chapter]
+        if not spans:
+            console.print(f"[red]没有第 {chapter} 章（可用章号："
+                          f"{[s.index for s in chapter_spans(ir)]}）[/red]")
+            raise typer.Exit(1)
+        wanted = {b.id for b in spans[0].blocks}
+        blocks = [b for b in blocks if b.id in wanted]
+    items: list[SegmentIn] = []
+    for b in blocks[:limit]:
+        for uid in b.unit_ids():
+            t = b.unit_text(uid)
+            if t.strip():
+                items.append(SegmentIn(uid, t, b.type))
+    if not items:
+        console.print("[red]没有可比较的段落[/red]")
+        raise typer.Exit(1)
+
+    key = get("DEEPSEEK_API_KEY") or ""
+    local_key = get("LOCAL_API_KEY") or "sk-local"  # llama.cpp 默认不校验
+    providers = [DeepSeekProvider(key or "no-key", model=model_a or "deepseek-flash",
+                                 base_url=get("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL,
+                                 price_tier=price_tier,
+                                 extra_body={"thinking": {"type": "disabled"}})]
+    providers.append(DeepSeekProvider(  # 本地端点也是 OpenAI 兼容协议
+        local_key, model=model_b or "qwen3-8b",
+        base_url=(base_url or "").rstrip("/"),
+        price_tier="local",  # 本地不计费，否则对比表会算出虚假花费
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        timeout=600.0))
+    providers[1].name = "local"
+
+    ctx = BookContext(doc_id=ir.doc.id, title=ir.doc.title, author=ir.doc.author,
+                      source_lang=ir.doc.source_lang or "ja")
+    console.print(f"[dim]对比 {len(items)} 段（第 {chapter or '全书'} 章区间）…[/dim]")
+    rep = run_compare(items, providers, ctx, sample=sample, batch_items=batch_items,
+                      progress=lambda m: console.print(f"  [dim]{m}[/dim]"))
+
+    console.print(f"\n[bold]成本与速度[/bold]\n{rep.table()}")
+    console.print("\n[bold]可判定质量问题[/bold]（数字越小越好）")
+    kinds = sorted({k for r in rep.results for k in r.issues})
+    if kinds:
+        header = f"{'引擎':<12}" + "".join(f"{k:>16}" for k in kinds)
+        console.print(header)
+        for r in rep.results:
+            console.print(f"{r.name:<12}" + "".join(f"{r.issues.get(k, 0):>16}" for k in kinds))
+    else:
+        console.print("  （两边都没有可判定问题）")
+    for r in rep.results:
+        if r.error:
+            console.print(f"  [yellow]{r.name} 出错：{r.error}[/yellow]")
+
+    if rep.samples:
+        console.print("\n[bold]逐条对照[/bold]")
+        for seg_id, src, outs in rep.samples:
+            console.print(f"\n  [dim]{seg_id}[/dim] 原文：{src[:110]}")
+            for name, tgt in outs.items():
+                console.print(f"    [cyan]{name}[/cyan]：{tgt[:110] or '（空）'}")
+    console.print("\n[dim]质量指标只覆盖可判定问题；语义质量仍需人眼看上面几条对照。[/dim]")
 
 
 if __name__ == "__main__":  # pragma: no cover
