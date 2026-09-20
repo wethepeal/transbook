@@ -3,18 +3,24 @@
 问题：一部长篇里人名、称谓、伏笔跨章呼应，但翻译是**按批**做的，模型看不到前面。
 术语表只能锁住固定词，锁不住"上一章谁死了、谁和谁结盟"。
 
-做法：**从原文按章生成累积梗概**（不是从译文——否则要先全译完才能摘要，
-成了鸡生蛋）。翻译第 N 章时把"截至第 N-1 章的前情"注入系统提示词。
+做法：**从原文按章生成独立短摘要**（不是从译文——否则要先全译完才能摘要，
+成了鸡生蛋）。翻译第 N 章时把"最近 K 章的前情"注入系统提示词。
 
-之所以按章而不是整本：一是提示词预算有限，二是**每章只跑一次**，
-第 N 章的梗概在前 N-1 章的基础上增量生成，成本是章数而非段落数。
+之所以按章而不是整本：一是提示词预算有限，二是**每章只跑一次**，成本是章数而非段落数。
+
+早期的"累积式"摘要（把新章合并进旧梗概）**已废弃**：实测让模型"合并并压缩到 N 字"
+完全不可靠——要求 800 字，连跑十章涨到 3093 字，再加一轮"压缩"反而更长（见 D-052）。
+现在改成"每章独立 + 注入时只取最近 K 章"，增长由"窗口 × 每章预算"确定性封顶。
+唯一残留的风险是**模型不遵守单章字数上限**（那只是提示词里的要求，不是保证），
+而注入时（`translate/runner.py::_prev_summary`）是把各章原样拼起来、不再裁剪——
+所以对明显超标的章用 `compress_summary` 兜一次。
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from transbook.ir import Block, DocumentIR
 from transbook.store import db as store
@@ -44,6 +50,28 @@ USER = """请把第 {index} 章「{title}」的原文压缩成不超过 {per_cha
 {text}"""
 
 EMPTY = "（这是第一章，没有前情）"
+
+#: 单章摘要超过每章预算多少倍才值得再花一次调用去压。
+#: 1.5 倍以内直接接受——为了几十个字再调一次 API 不划算，压缩本身也可能失败或变长。
+OVERSIZE_FACTOR = 1.5
+
+COMPRESS_SYSTEM = """你在压缩一份小说前情提要，供译者参考。要求：
+1. 只保留**跨章仍然有用**的信息：人物及其称谓与关系、地点、关键事件、未解悬念、
+   专有名词的既定译法。
+2. 丢掉文学化描写、重复叙述、以及已经解决且不再相关的细节。
+3. 写成连贯的整段中文，不要分点、不要标题。
+4. 只输出压缩后的提要本身，不要解释你删了什么。"""
+
+COMPRESS = """下面是一份前情提要，共 {n} 字，请压缩到**不超过 {budget} 字**。
+
+硬要求：
+- 必须不超过 {budget} 字。
+- 保留人物、称谓、关系、关键事件与未解悬念。
+- 写成连贯的整段中文，不要分点、不要评论。
+- 只输出压缩后的提要本身。
+
+原文：
+{n_text}"""
 
 
 @dataclass
@@ -100,9 +128,27 @@ def chapter_spans(ir: DocumentIR, *,
 
 
 def build_compress_messages(summary: str, *, budget: int) -> list[dict[str, str]]:
-    """超长时的压缩请求——不加这一步，累积梗概会一章比一章长。"""
-    return [{"role": "user", "content": COMPRESS.format(
-        n=len(summary), budget=budget, n_text=summary)}]
+    """构造"把过长的前情提要压回预算内"的请求。
+
+    为什么需要这一步：每章字数上限只是**提示词里的要求**，模型并不保证遵守；而注入
+    前情时（`translate/runner.py::_prev_summary`）是把最近 K 章原样拼起来的，
+    没有二次裁剪。某章写长了就会挤占正文的提示词预算，且随窗口逐批重复计费。
+    """
+    return [
+        {"role": "system", "content": COMPRESS_SYSTEM},
+        {"role": "user", "content": COMPRESS.format(
+            n=len(summary), budget=budget, n_text=summary)},
+    ]
+
+
+def compress_summary(provider: TranslationProvider, summary: str, *,
+                     budget: int) -> tuple[str, Usage]:
+    """让模型把超长摘要压到 `budget` 字以内，返回 `(文本, usage)`。
+
+    这里**不做成败判断**：调用失败、返回空、或压完反而更长，都由调用方决定怎么处理。
+    摘要本身是可选增强，不该因为一次压缩不理想就丢掉已有内容。
+    """
+    return provider.complete(build_compress_messages(summary, budget=budget))
 
 
 def build_summary_messages(span: ChapterSpan, *, source_lang: str = "ja",
@@ -130,14 +176,16 @@ class SummaryReport:
     skipped: int = 0
     failed: int = 0
     pruned: int = 0
+    compressed: int = 0
     usage: Usage = field(default_factory=Usage)
 
     def summary(self) -> str:
         tail = f" ｜ 清理过期 {self.pruned}" if self.pruned else ""
+        comp = f" ｜ 压缩 {self.compressed}" if self.compressed else ""
         fail = f" ｜ [yellow]失败 {self.failed}[/yellow]" if self.failed else ""
         return (f"章节 {self.chapters} ｜ 新生成 {self.generated} ｜ 沿用已有 {self.skipped}"
-                f"{tail}{fail} ｜ token 入 {self.usage.tokens_in:,} / 出 {self.usage.tokens_out:,} ｜ "
-                f"花费 ¥{self.usage.cost:.4f}")
+                f"{tail}{comp}{fail} ｜ token 入 {self.usage.tokens_in:,} / "
+                f"出 {self.usage.tokens_out:,} ｜ 花费 ¥{self.usage.cost:.4f}")
 
 
 def generate_summaries(conn: sqlite3.Connection, provider: TranslationProvider,
@@ -147,9 +195,12 @@ def generate_summaries(conn: sqlite3.Connection, provider: TranslationProvider,
                        chapter_chars: int = DEFAULT_CHAPTER_CHARS,
                        force: bool = False,
                        progress: Callable[[str, float], None] | None = None) -> SummaryReport:
-    """逐章生成**独立**短摘要并落库（每章一次调用）。
+    """逐章生成**独立**短摘要并落库（每章一次调用，超标时可能再加一次压缩调用）。
 
     已生成过的章默认沿用（省钱、可断点续跑）。`force=True` 全部重生成。
+
+    单章摘要若超过每章预算的 1.5 倍，会再调一次模型把它压下来（见 `compress_summary`）；
+    压缩失败、返回空、或压完不更短时**保留原摘要**，绝不因为压缩不理想就丢内容。
 
     `progress` 的契约是 **`(message, fraction)` 两个参数**，与流水线其它阶段一致。
     曾经这里只传一个参数、而调用方传的是双参 lambda，第一次回调就抛 TypeError，
@@ -182,10 +233,33 @@ def generate_summaries(conn: sqlite3.Connection, provider: TranslationProvider,
         if not summary:
             rep.skipped += 1
             continue
+        tokens_in, tokens_out, cost = usage.tokens_in, usage.tokens_out, usage.cost
+        # 模型不一定遵守单章字数上限（那只是提示词里的**要求**），而注入前情时不再裁剪，
+        # 所以明显超标就地压一次。阈值 1.5 倍：为几十个字再花一次调用不划算。
+        if len(summary) > per_chapter * OVERSIZE_FACTOR:
+            before = len(summary)
+            shrunk, cusage = "", None
+            try:
+                shrunk, cusage = compress_summary(provider, summary, budget=per_chapter)
+            except Exception as exc:  # noqa: BLE001
+                # 压缩失败不该丢内容：保留原摘要继续，只是这一次没能压下来
+                if progress:
+                    progress(f"第 {span.index} 章摘要压缩失败（保留原样）："
+                             f"{type(exc).__name__}", frac)
+            shrunk = (shrunk or "").strip()
+            # 只采用**确实更短**的结果——模型偶尔会越压越长（累积式摘要上实测过）
+            if shrunk and len(shrunk) < before:
+                summary = shrunk
+                rep.compressed += 1
+                if cusage is not None:
+                    tokens_in += cusage.tokens_in
+                    tokens_out += cusage.tokens_out
+                    cost += cusage.cost
+                    rep.usage.add(cusage)
         store.put_summary(conn, ir.doc.id, span.index, summary=summary, title=span.title,
                           engine=provider.name, model=provider.model,
-                          tokens_in=usage.tokens_in, tokens_out=usage.tokens_out,
-                          cost=usage.cost)
+                          tokens_in=tokens_in, tokens_out=tokens_out,
+                          cost=cost)
         rep.generated += 1
         rep.usage.add(usage)
         if progress:

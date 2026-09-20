@@ -280,6 +280,9 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | D-057 | 2026-09-21 | ✅ **发布形态：前端嵌进 wheel + 一键启动包**。`hatch_build.py`（hatchling 构建钩子）把 `web/dist` 映射成 wheel 内的 `transbook/web/dist`——该路径正好落在 `find_web_dist()` 的向上查找链上，运行期零配置就能找到界面。新增 `tools/build_release.py`（前端 → wheel → Release zip，并在打包后**拆开 wheel 复核里面真有界面**）、`packaging/start.cmd`、`packaging/README.txt`、`.github/workflows/{ci,release}.yml` | 用户要求"克隆到私人电脑 + 包安装开箱即用、不折腾命令行" | **刻意不用 pyproject 的 `force-include` 表**：实测前端缺失时它直接抛 `FileNotFoundError`，把 `uv sync` 与 `uv build` 双双打挂——而全新 clone 恰恰没有 `web/dist`（它在 .gitignore 里）。钩子改成"有就嵌入、没有就跳过并告警"。另修一个装包后必然踩到的坑：`PROJECT_ROOT = parents[2]` 在 wheel 里会算成 `site-packages` 的上一级，`.env` **永远读不到** → `env_candidates()` 增加"当前工作目录"与 `%APPDATA%\transbook`，优先级 ProjectRoot > cwd > AppData。**`start.cmd` 刻意只写 ASCII**：实测 UTF-8 无 BOM / 带 BOM / 加 `chcp 65001` 三种写法重定向后字节**完全相同**，无法靠选编码保证安全，故把中文全部交给 Python（走控制台 Unicode API） |
 | D-058 | 2026-09-21 | 🔴 **修复存量缺陷：输出被重定向时 GBK 之外的字符会让命令直接崩**。Windows 上 stdout 是管道/文件时按 ANSI 代码页（简中=GBK）编码，而 GBK 里没有 `✓`(U+2713)、`✗`(U+2717)、`⑪`(U+246A)——rich 一打印就抛 `UnicodeEncodeError`，进程以非零码退出 | 打包时 `build_release.py` 转印 npm/vite 输出（vite 会打印 `✓ built in`）当场崩掉，顺着查出来的 | 实测确认：`rich` 打印 `✓` 到管道 → **rc=1**；`tp --help`（某条命令 docstring 里有 `⑪`）走管道同样崩；`①`~`⑩` 在 GBK 里，`⑪` 起不在。修法：`cli.py` 与 `build_release.py` 各加输出编码兜底（`reconfigure(errors="replace")`），把断言换成降级显示；并移除命令 docstring 里的 `⑪⑫⑬`。**直接输出到真实控制台本来就没这个问题**，所以这个坑只在管道 / 重定向 / CI 里才踩得到 |
 
+| D-059 | 2026-09-21 | ✅ **补上 `COMPRESS` 的实现并接线**。`build_compress_messages` 原先引用一个**从未定义**的 `COMPRESS`，且全仓库无人调用它——整个仓库唯一的 F821，测试全绿只是因为这条路径不可达。现在定义提示词 + `compress_summary(provider, summary, budget)`，并在 `generate_summaries` 里对**超过每章预算 1.5 倍**的章就地压一次 | 用户要求"待定事项补上实现"；而注入前情时（`translate/runner.py::_prev_summary`）是把最近 K 章**原样拼接、没有二次裁剪**，字数上限只靠提示词里"要求"模型遵守 | 三条安全边界：① 压缩失败**保留原摘要**（摘要是可选增强，不该因压缩不理想丢内容）；② 只采用**确实更短**的结果（模型偶尔越压越长，累积式摘要上实测过）；③ 压缩用量并入 `SummaryReport.usage` 与摘要行的 `cost`，不漏记。阈值取 1.5 倍是权衡——为几十个字再花一次调用不划算。新增 6 项测试。另：模块 docstring 里"累积梗概"的旧描述一并改正（D-052 已改设计） |
+| D-060 | 2026-09-21 | ✅ **代码推送到 GitHub**：`https://github.com/wethepeal/transbook`（私有，默认分支 `main`）。本地原在 `master` 且无 remote，已改名为 `main` 并接上远端 | 用户要求上传并继续开发 | 远端建仓时自带 1 个 Initial commit（GitHub 标准 Python `.gitignore` + MIT `LICENSE`），与本地历史**不相干**，故用 `--allow-unrelated-histories` 合并，**不做强制推送**；`.gitignore` 的 add/add 冲突按"远端模板为基底 + 追加本项目规则"解决（上游模板已含 `.env`，故删掉本地重复项）。**推 `.github/workflows/*` 需要 Workflows 权限**——本次推送未被拒，说明该令牌已具备。两个环境坑见 §7-19/20：git 必须走系统代理 `127.0.0.1:7897`（Python 会自动读注册表，git 不会，症状是"连不上 github.com"）；本 harness 的 `%TEMP%` 每次调用不同，导致凭据文件"写了却找不到"。令牌经工作区外文件用 `git credential-store` 注入，**不写进 URL、不进仓库**，用完即删并全盘复查无残留 |
+
 ---
 
 ## 6. 任务板 / 里程碑
@@ -302,7 +305,7 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | M4 输出完善（EPUB3 校验、Typst PDF 排版、审核回流 export/apply-review） | ✅ **完成**：EPUB3 + PDF(Typst) + 审核回流 + **封面页 + epubcheck 校验**（D-050/D-051，4 个成品 epubcheck 0 错 0 警） |
 | M5 服务化（FastAPI + 任务队列 + SSE 进度） | ✅ **完成**：`tp serve` + 13 个 HTTP 路由 + 子进程作业 + SSE；验收三项真机通过（D-054） |
 | M6 Web GUI（项目管理 / 段落级对照校对 / 导出） | ✅ **完成**：React + TS + Vite，`tp serve` 一并托管；真实浏览器验收通过（D-055） |
-| M7 分发与打包（前端进 wheel、一键启动包、CI 自动发布） | ✅ **完成**：`hatch_build.py` + `tools/build_release.py` + `packaging/start.cmd` + GitHub Actions；干净环境实测 **14/14 通过**（D-057 / D-058） |
+| M7 分发与打包（前端进 wheel、一键启动包、CI、上传 GitHub） | ✅ **完成**：`hatch_build.py` + `tools/build_release.py` + `packaging/start.cmd` + GitHub Actions；干净环境实测 **14/14 通过**；已推送到 `wethepeal/transbook`（D-057 / D-058 / D-060） |
 
 ---
 
@@ -343,6 +346,23 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
     只测"段落数差不多"会漏掉系统性错误。内联振假名就是这样被发现的——
     段落数一直是 3317（看着正常），但精确命中只有 58.9%，翻译输入被注音切碎。
     **有孪生版时，永远优先用字符级相似度验收，而不是段数。**
+19. 🔴 **本机 git 访问 GitHub 必须走系统代理**：这台机器靠 `127.0.0.1:7897` 上网。
+    Python 会自动读注册表里的 WinINET 代理设置，**git/libcurl 不会**——症状是
+    `Failed to connect to github.com port 443` / `Connection was reset`，看着像网络故障，
+    实际是"请求没走代理"。已在仓库级配置 `http.https://github.com.proxy`。
+    排查顺序：先 `git config --get http.https://github.com.proxy`，再查注册表
+    `HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 的 `ProxyServer`。
+20. 🔴 **本 harness 的 `%TEMP%` 每次调用可能不同**（形如 `...\Temp\dsh-XXXXXX\`）：
+    状态/凭据文件写在 `$env:TEMP` 下，下一次调用就找不到（git 表现为
+    `unable to get credential storage lock: Permission denied`）。
+    需要跨调用复用的东西要放到固定路径。
+21. 🔴 **Windows 上 stdout 被重定向时按 ANSI 代码页编码**（简中=GBK），而 GBK 里没有
+    `✓`(U+2713)、`✗`(U+2717)、`⑪`(U+246A)——rich 一打印就抛 `UnicodeEncodeError`，
+    命令以非零码退出。已在 `cli.py` 与 `build_release.py` 加 `errors="replace"` 兜底。
+    **只在管道 / 重定向 / CI 里踩得到**，直接输出到真实控制台没有问题。
+22. **PowerShell 5.1 读无 BOM 的 `.ps1` 会按 GBK 解码**，中文被解坏后连语法都过不去
+    （`tools/verify_install.ps1` 因此必须存成 **UTF-8 with BOM**）。同理，`.cmd` 里的中文
+    在不同代码页下都会乱码，所以 `packaging/start.cmd` 刻意只写 ASCII、中文交给 Python。
 
 ---
 
@@ -367,9 +387,12 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 - [ ] 视需要启用 §3.5 的候选插件
 - [ ] `git init` 与分支/提交规范（待用户确认）
 - [ ] 回答 §1.2 的项目问题并补全 §1、§2、§4
-- [ ] **ruff 存量告警 85 个**（`src` 59 / `tests` 30；其中 23 个 B008 是 Typer/FastAPI 默认参数的**误报**）：清理掉之后 CI 里的 lint 步骤就能从"信息性"改成"阻断"
-- [ ] `translate/summary.py::build_compress_messages` 引用了**未定义的 `COMPRESS`**，且全仓库无人调用它——需要决定"补实现"还是"删除"
-- [ ] 仓库地址到手后上传 GitHub（用户已确认最终会转为**公开**；上传前再审一遍全部提交信息）
+- [ ] **ruff 存量告警 80 个**（其中 23 个 B008 是 Typer/FastAPI 默认参数的**误报**）：
+      清理掉之后 CI 里的 lint 步骤就能从"信息性"改成"阻断"
+- [ ] 仓库转公开前再审一遍全部提交信息——已知 `ed2e328`、`30eea26` 两条的**主题行带一个多余 BOM**
+      （`?` 会显示在 GitHub 上）。要改必须 rebase + 强推，会重写全部后续 SHA，需先确认
+- [x] ~~`build_compress_messages` 引用未定义的 `COMPRESS`~~ → 已补实现并接线（D-059）
+- [x] ~~仓库地址到手后上传 GitHub~~ → 已推送 `wethepeal/transbook`（D-060）
 
 ---
 
@@ -428,3 +451,5 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | 2026-09-21 | **M6 Web GUI**（D-055）：`web/`（React 19 + TS 5.9 + Vite 8，hash 路由、零 UI 框架）——项目列表与上传、进度看板（SSE）、段落级左右对照校对、产物下载；构建产物由 `tp serve` 托管。Playwright 真实浏览器验收通过（改一段→保存→落库→撤销）。修四个坑（保存后无反馈、撤销 400、搜索漏 final_translation、HEAD 405）。测试 266 → 280 全绿 | agent |
 | 2026-09-21 | **M0–M6 交付说明 + 44 卷全新书回归**（D-056）：`docs/DELIVERY.md`（10 节）；回归挖出并修掉三个缺陷（滚动摘要回调签名不一致、`chapter_spans` 把表紙/CONTENTS 当章、JSON 解析失败终止整批不重试） | agent |
 | 2026-09-21 | **M7 分发与打包**（D-057、D-058）：前端嵌进 wheel（`hatch_build.py`）+ `tools/build_release.py`（打包后复核 wheel 内真有界面）+ `packaging/start.cmd`（纯 ASCII）+ GitHub Actions（ci/release）+ 新增 `tp setup` / `tp serve --open`；修两个缺陷：`.env` 在 wheel 安装后读不到、管道输出遇 GBK 外字符直接崩。新增 `tools/verify_install.ps1`（**14 项**开箱即用检查，实测全过）与 `tests/test_packaging.py`（8 项）。测试 287 → **295** 全绿 | agent |
+| 2026-09-21 | **代码上传 GitHub**（D-060）：本地 `master` 改名 `main` 接上 `wethepeal/transbook`（私有）；合并远端 Initial commit——保留 MIT LICENSE，`.gitignore` 取"上游模板 + 项目规则"、不做强推。远端核实：**30 个提交**、根目录 16 项齐全、两个 workflow 都在（说明 Workflows 权限够用）。记录两个环境坑：git 必须走系统代理 7897、harness 的 `%TEMP%` 每次调用不同 | agent |
+| 2026-09-21 | **补上 `COMPRESS` 实现**（D-059）：定义压缩提示词与 `compress_summary`，对超过每章预算 1.5 倍的摘要就地压一次（失败/变长则保留原样，用量并入记账）。仓库唯一的 F821 清零，ruff 总告警 85 → **80**。测试 295 → **301** 全绿 | agent |

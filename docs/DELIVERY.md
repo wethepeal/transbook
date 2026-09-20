@@ -491,7 +491,7 @@ Playwright 真实浏览器实测（43 卷，3349 段）：
 ### 6.9 测试
 
 ```
-295 passed ｜ 0 failed
+301 passed ｜ 0 failed
 ```
 
 覆盖抽取（EPUB/PDF/表格/脚注/注音/页眉页脚）、存储与 TM、翻译编排与护栏、渲染（EPUB/PDF）、QA、审核回流、滚动摘要、引擎对比、服务与 Web、以及**发布形态**（打包相关回归见 §11）。**全部零成本**（用 Fake 引擎与合成夹具，不调用 API）。
@@ -669,8 +669,7 @@ Translation_Engineering/
 4. **繁体字检测是启发式**（繁体专用字 + 日文专用汉字，阈值 2）。单个繁体字可能是刻意保留的人名用字，故不报。
 5. **计数与实测口径**：`tp translate --dry-run` 的预估约为实际的 **1.7 倍**（系统提示词与真实 token 数开销），保守可用。
 6. **输出被重定向时，GBK 表达不了的字符会降级成 `?`**。Windows 上 stdout 被管道或文件捕获时按 ANSI 代码页编码，而 GBK 里没有 `✓`(U+2713)、`⑪`(U+246A) 这些字符。已在 `cli.py` 加了全局兜底（`errors="replace"`），所以只会显示降级、不会中断命令；直接输出到真实控制台时不受影响。**加兜底之前，`tp ... | ...` 和 `tp ... > log.txt` 会直接以非零码退出**（实测确认）。
-7. **`src/transbook/translate/summary.py` 有一个从未接线的函数**：`build_compress_messages` 引用了未定义的 `COMPRESS`，且全仓库没有任何地方调用它（所以测试全绿也发现不了）。它属于早期"累积式压缩"方案的遗留物，而下方 `build_summary_messages` 的注释明确说明后来放弃了那条路线。保留未删是因为它记录了当时的设计意图；需要时再决定实现还是移除。
-8. **ruff 有 85 个存量告警**（`src` 59 / `tests` 30），其中 23 个是 B008——Typer/FastAPI 默认参数的惯用法，属工具误报。因此 CI 里的 ruff 步骤是**信息性、不阻断**的；清理是独立的一件事，不宜混在功能改动里。
+7. **ruff 还有 80 个存量告警**，其中 23 个是 B008——Typer/FastAPI 默认参数的惯用法，属工具误报。因此 CI 里的 ruff 步骤是**信息性、不阻断**的；清理是独立的一件事，不宜混在功能改动里。
 
 **验证覆盖的边界**：
 
@@ -776,6 +775,27 @@ powershell -File tools\verify_install.ps1
 | 启动日志中无"界面未构建" | PASS |
 
 **通过 14 项，失败 0 项。**
+
+### 11.7 代码仓库与本机推送的两个坑
+
+代码在 <https://github.com/wethepeal/transbook>（默认分支 `main`）。
+
+在**本机**推送时有两个坑，都不像"权限问题"，很容易误判：
+
+1. **git 必须走系统代理**。这台机器通过 `127.0.0.1:7897` 上网，Python 会自动读取注册表里的
+   WinINET 代理设置，而 **git / libcurl 不会**。症状是 `Failed to connect to github.com
+   port 443` 或 `Connection was reset`——看着像网络故障，其实只是请求没走代理。
+   本仓库已配置（只对 github.com 生效）：
+
+   ```powershell
+   git config http.https://github.com.proxy http://127.0.0.1:7897
+   ```
+
+2. **推送 `.github/workflows/*` 需要令牌具备 `Workflows: Read and write`**，否则 GitHub 会
+   **拒绝整个 push**，而不是只跳过那两个文件。本次推送未被拒，说明当前令牌已具备该权限。
+
+推送用的令牌经工作区外的文件注入 `git credential-store`，**不写进 remote URL、不进仓库**，
+用完即删并全盘复查无残留。
 
 ---
 

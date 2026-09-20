@@ -1,7 +1,8 @@
 """M3：滚动摘要。
 
 设计要点：**从原文按章生成**（不是从译文），否则要先全译完才能摘要，成了鸡生蛋。
-每章只跑一次，第 N 章的梗概在前 N-1 章的基础上增量生成。
+每章独立生成、只跑一次；注入时取最近 K 章，增长由"窗口 × 每章预算"确定性封顶。
+单章若超预算（模型不保证遵守提示词里的字数要求），由 `compress_summary` 再压一次。
 """
 
 from __future__ import annotations
@@ -10,16 +11,21 @@ from pathlib import Path
 
 import pytest
 
-from transbook.ir import Block, DocumentIR, DocMeta
+from transbook.ir import Block, DocMeta, DocumentIR
 from transbook.store import connect, import_ir
-from transbook.store.db import put_summary, summary_before, summaries
+from transbook.store.db import put_summary, summaries, summary_before
 from transbook.translate import BookContext
-from transbook.translate.base import SegmentOut, Usage
+from transbook.translate.base import Usage
 from transbook.translate.fake import FakeProvider
 from transbook.translate.runner import run
-from transbook.translate.summary import (build_summary_messages, chapter_of_block,
-                                         chapter_spans, generate_summaries,
-                                         per_chapter_budget)
+from transbook.translate.summary import (
+    build_compress_messages,
+    build_summary_messages,
+    chapter_of_block,
+    chapter_spans,
+    generate_summaries,
+    per_chapter_budget,
+)
 
 
 def make_ir() -> DocumentIR:
@@ -320,4 +326,107 @@ def test_dry_run_counts_summary_overhead(tmp_path):
     with_sum = run(conn, prov, BookContext(doc_id="doc"), dry_run=True, **args)
     without = run(conn, prov, BookContext(doc_id="doc"), dry_run=True, batch_items=1)
     assert with_sum.est_tokens_in > without.est_tokens_in
+    conn.close()
+
+
+# ── 超长摘要的压缩兜底 ──────────────────────────────────────────────
+class CompressAwareProvider(FakeProvider):
+    """区分"摘要请求"与"压缩请求"：前者回超长文本，后者回短文本。
+
+    用系统提示词里的特征串判定请求类型，而不是靠调用顺序——顺序会随实现变化，
+    特征串不会。
+    """
+
+    MARKER = "压缩一份小说前情提要"
+
+    def __init__(self, *, summary_text: str = "很长" * 400,
+                 compress_text: str = "压缩后的短摘要",
+                 compress_error: Exception | None = None) -> None:
+        super().__init__()
+        self.summary_text = summary_text
+        self.compress_text = compress_text
+        self.compress_error = compress_error
+        self.kinds: list[str] = []
+
+    def complete(self, messages):
+        if self.MARKER in messages[0]["content"]:
+            self.kinds.append("compress")
+            if self.compress_error is not None:
+                raise self.compress_error
+            return self.compress_text, Usage(tokens_in=60, tokens_out=20, cost=0.0011, calls=1)
+        self.kinds.append("summary")
+        return self.summary_text, Usage(tokens_in=100, tokens_out=200, cost=0.0029, calls=1)
+
+
+def test_compress_prompt_carries_source_and_budget():
+    """压缩请求必须把预算和原文都带上，否则模型无从下手。"""
+    msgs = build_compress_messages("旧提要", budget=200)
+    assert msgs[0]["role"] == "system"
+    user = msgs[1]["content"]
+    assert "200 字" in user, "预算必须写进用户消息"
+    assert "旧提要" in user
+    assert "共 3 字" in user, "把当前长度告诉模型，便于它判断要删多少"
+
+
+def test_oversize_chapter_summary_is_compressed(tmp_path):
+    """超过每章预算 1.5 倍的摘要要再压一次，且压缩用量必须并入记账。"""
+    conn = connect(tmp_path / "t.db")
+    prov = CompressAwareProvider()
+    rep = generate_summaries(conn, prov, make_ir(), BookContext(doc_id="doc"))
+
+    # per_chapter_budget(800, 4) == 200，阈值 1.5 → 300 字；800 字的摘要必然触发
+    assert rep.compressed == 4, "4 章都超预算，都该被压缩"
+    assert list(summaries(conn, "doc").values()) == ["压缩后的短摘要"] * 4
+    assert rep.usage.calls == 8, "4 次摘要 + 4 次压缩"
+    assert rep.usage.cost == pytest.approx(4 * 0.0029 + 4 * 0.0011), "压缩花费不能漏记"
+    assert "压缩 4" in rep.summary()
+    conn.close()
+
+
+def test_within_budget_summary_is_not_compressed(tmp_path):
+    """没超阈值就不该多花一次调用——为几十个字再调 API 不划算。"""
+    conn = connect(tmp_path / "t.db")
+    prov = CompressAwareProvider(summary_text="短" * 100)  # 100 字 < 300
+    rep = generate_summaries(conn, prov, make_ir(), BookContext(doc_id="doc"))
+
+    assert rep.compressed == 0
+    assert "compress" not in prov.kinds
+    assert rep.usage.calls == 4
+    conn.close()
+
+
+def test_compression_failure_keeps_original_summary(tmp_path):
+    """压缩失败不能丢内容——摘要本身是可选增强，保留原样继续。"""
+    conn = connect(tmp_path / "t.db")
+    prov = CompressAwareProvider(compress_error=RuntimeError("限流"))
+    rep = generate_summaries(conn, prov, make_ir(), BookContext(doc_id="doc"))
+
+    assert rep.compressed == 0
+    assert rep.generated == 4 and rep.failed == 0, "压缩失败不等于摘要失败"
+    assert set(summaries(conn, "doc").values()) == {"很长" * 400}
+    conn.close()
+
+
+def test_compression_result_longer_than_original_is_discarded(tmp_path):
+    """只采用**确实更短**的结果——模型偶尔会越压越长（累积式摘要上实测过）。"""
+    conn = connect(tmp_path / "t.db")
+    prov = CompressAwareProvider(compress_text="更长" * 500)
+    rep = generate_summaries(conn, prov, make_ir(), BookContext(doc_id="doc"))
+
+    assert rep.compressed == 0
+    assert set(summaries(conn, "doc").values()) == {"很长" * 400}
+    conn.close()
+
+
+def test_compression_progress_failure_does_not_break_callback(tmp_path):
+    """压缩失败时的进度回调也必须遵守 `(message, fraction)` 双参契约。"""
+    conn = connect(tmp_path / "t.db")
+    seen: list[tuple[str, float]] = []
+    prov = CompressAwareProvider(compress_error=RuntimeError("限流"))
+    generate_summaries(conn, prov, make_ir(), BookContext(doc_id="doc"),
+                       progress=lambda m, f: seen.append((m, f)))
+
+    assert len(seen) == 8, "每章一条生成 + 一条压缩失败，共 8 条"
+    assert all(isinstance(f, float) and 0 < f <= 1.0 for _, f in seen)
+    assert any("压缩失败" in m for m, _ in seen)
     conn.close()
