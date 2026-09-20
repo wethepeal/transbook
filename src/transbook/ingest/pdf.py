@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from transbook.ir import Block, DocumentIR, DocMeta, TocEntry
-from transbook.textutil import normalize_ws
+from transbook.textutil import (classify_matter, clean_paragraph,
+                                clean_pdf_text, join_wrapped, normalize_ws)
 
 _WS = re.compile(r"[\s\u3000]+")
 _KANA = re.compile(r"[\u3041-\u309f\u30a1-\u30f6]")
@@ -80,22 +81,28 @@ def segment_kind(dy_from_top: float, h: float, *, lo: float = 0.30,
     return "inner"
 
 
-def segments_to_paragraphs(segments: list[tuple[str, float]], h: float) -> list[str]:
-    """把「列段 + 首字相对顶部偏移」序列还原成段落列表。"""
+def segments_to_paragraphs(segments: list[tuple[str, float]], h: float, *,
+                           vertical: bool = True) -> list[str]:
+    """把「列段 + 首字相对顶部偏移」序列还原成段落列表。
+
+    `vertical` 决定换行拼接规则：竖排列边界直接相连；横排要区分**跨行断词**
+    （`trans-` + `lation`）与**正常换行**（补空格）。见 `textutil.join_wrapped`。
+    默认 `True` 保持竖排既有行为。
+    """
     paras: list[str] = []
     cur = ""
     for text, dy in segments:
-        t = normalize_ws(text)
+        t = clean_pdf_text(text)
         if not t:
             continue
         if segment_kind(dy, h) == "start" and cur:
             paras.append(cur)
             cur = t
         else:
-            cur = f"{cur}{t}" if cur else t
+            cur = join_wrapped(cur, t, vertical=vertical)
     if cur:
         paras.append(cur)
-    return paras
+    return [clean_paragraph(p) for p in paras]
 
 
 # ── 抽取器 ─────────────────────────────────────────────────────────
@@ -137,17 +144,17 @@ class PdfIngestor:
         return pdfium.PdfDocument(self.path)
 
     # ── 页面级解析 ──────────────────────────────────────────────
-    def _page_segments(self, page) -> tuple[list[tuple[str, float]], float, list[tuple[float, float]]]:
-        """返回 (列段列表, 字符高度, 相邻字符位移样本)。
+    def _page_chars(self, page) -> tuple[str, list[tuple[float, float, float, float]], float,
+                                         list[tuple[float, float]]]:
+        """取本页原始文本、字符框、字符高度、相邻字符位移样本。
 
-        **每页独立计算文本区顶部 y**：不同页的版心位置可能不同（前置页、章首页尤其明显），
-        沿用全书统一的 top 会把 dy 全部算错，导致大量段落被错误合并（实测踩过：
-        段落数从 3388 掉到 340）。
+        这一层较贵（逐字符 `get_charbox`），每页只算一次。切段规则是可变的
+        （横排/竖排的版心参考边不同），所以拆到 `_page_segments` 里做。
         """
         tp = page.get_textpage()
         raw = tp.get_text_range()
         n = tp.count_chars()
-        boxes = []
+        boxes: list[tuple[float, float, float, float]] = []
         for i in range(n):
             try:
                 boxes.append(tp.get_charbox(i))
@@ -159,11 +166,33 @@ class PdfIngestor:
         samples = []
         for i in range(1, min(n, 400)):
             samples.append((boxes[i][0] - boxes[i - 1][0], boxes[i][1] - boxes[i - 1][1]))
+        return raw, boxes, h, samples
 
-        ys = [b[3] for b, c in zip(boxes, raw) if c.strip()]
-        top_y = max(ys) if ys else 0.0
+    def _page_segments(self, raw: str, boxes: list[tuple[float, float, float, float]],
+                       h: float, *, vertical: bool) -> list[tuple[str, float]]:
+        """切出「列段/行段」，并给出首字相对**版心参考边**的偏移量。
 
-        segments: list[tuple[str, float]] = []
+        参考边的选择就是段落判定的核心，两个方向完全不同：
+
+        * **竖排**：参考边是本页**最高的字符底边**（`max(y3)`），偏移量 = 首字下移量；
+          `字下げ`（≈1 字）即新段落。**参考边必须每页独立取**——各页版心位置不同，
+          沿用全书统一值会让段落数从 3388 掉到 340（实测踩过）。
+        * **横排**：参考边是本页**最左的字符左沿**（`min(x0)`），偏移量 = 首行缩进量；
+          缩进 ≈1 字即新段落，齐头行则是上一行的续接。另有一条兜底：若行间空隙
+          明显大于常规行距（**空行分段**，LaTeX / 网页导出的 PDF 常见），
+          把该行按 1 字缩进处理。
+        """
+        if vertical:
+            refs = [b[3] for b, c in zip(boxes, raw) if c.strip()]
+            ref = max(refs) if refs else 0.0
+            off_of = lambda b: ref - b[3]  # noqa: E731
+        else:
+            refs = [b[0] for b, c in zip(boxes, raw) if c.strip()]
+            ref = min(refs) if refs else 0.0
+            off_of = lambda b: b[0] - ref  # noqa: E731
+
+        # 先收集 (段文本, 首字符框)，横排还要用相邻行的位置算行距
+        raw_segs: list[tuple[str, tuple[float, float, float, float] | None]] = []
         pos = 0
         for part in raw.split("\r\n"):
             if part.strip():
@@ -172,14 +201,85 @@ class PdfIngestor:
                     if ch.strip():
                         first = pos + j
                         break
-                dy = top_y - boxes[first][3] if first < len(boxes) else 0.0
-                segments.append((part, dy))
+                raw_segs.append((part, boxes[first] if first < len(boxes) else None))
             pos += len(part) + 2
-        return segments, h, samples
+
+        # 行间空白 = 上一行底边 - 本行顶边（PDF 坐标 y 向上，故上一行 y 更大）
+        gaps: list[float] = []
+        if not vertical:
+            for (_, pa), (_, pb) in zip(raw_segs, raw_segs[1:]):
+                if pa and pb:
+                    gaps.append(pa[1] - pb[3])
+        med_gap = statistics.median(gaps) if gaps else 0.0
+
+        segments: list[tuple[str, float]] = []
+        for i, (part, box) in enumerate(raw_segs):
+            off = off_of(box) if box else 0.0
+            if not vertical and i > 0 and med_gap > 0 and i - 1 < len(gaps):
+                if gaps[i - 1] > med_gap * 1.6 + h * 0.4:
+                    off = max(off, h)  # 空行 → 按字下げ处理，即新段落
+            segments.append((part, off))
+        return segments
+
+    # ── 图片提取 ────────────────────────────────────────────────
+    def _page_images(self, page, assets_dir: Path, pi: int) -> list[str]:
+        """抽出本页的内嵌图片，返回保存后的文件名列表。
+
+        过滤小于 64px 的图（页码装饰、线条等）；同名去重；失败不中断（插图缺失不应毁掉整本书）。
+        """
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:  # pragma: no cover
+            return []
+        saved: list[str] = []
+        try:
+            objs = list(page.get_objects())
+        except Exception:  # noqa: BLE001
+            return []
+        for k, obj in enumerate(objs, start=1):
+            if not isinstance(obj, pdfium.PdfImage):
+                continue
+            try:
+                w, h = obj.get_px_size()
+            except Exception:  # noqa: BLE001
+                continue
+            if min(w, h) < 64:
+                continue
+            # 同一个 base 名可能残留上一轮抽取的其它扩展名，先清掉，避免重复打包
+            base = assets_dir / f"p{pi + 1:04d}_{k}"
+            for old in assets_dir.glob(f"{base.name}.*"):
+                try:
+                    old.unlink()
+                except OSError:  # pragma: no cover
+                    pass
+            # ① 优先 `extract()`：DCTDecode(JPEG) 等能**原样抽出内嵌流**，无重编码损失，
+            #    体积也小三倍多（实测 3340 KB/张 → 943 KB/张；整本 49.7 MB → ~15 MB）。
+            got: Path | None = None
+            try:
+                obj.extract(dest=base)  # 写入 `{base}.{真实扩展名}`
+                cands = sorted(assets_dir.glob(f"{base.name}.*"))
+                got = cands[0] if cands else None
+            except Exception:  # noqa: BLE001 - 个别编码（CMYK/JPX/带遮罩）会失败
+                got = None
+            # ② 退路：解成位图再存 PNG（体积大但一定能出图）
+            if got is None:
+                png = base.with_suffix(".png")
+                try:
+                    img = obj.get_bitmap().to_pil()
+                    if img.mode not in ("RGB", "RGBA"):
+                        img = img.convert("RGB")
+                    img.save(png)
+                    got = png
+                except Exception:  # noqa: BLE001
+                    continue
+            saved.append(got.name)
+        return saved
 
     # ── 主流程 ──────────────────────────────────────────────────
-    def extract(self) -> DocumentIR:
+    def extract(self, assets_dir: Path | None = None) -> DocumentIR:
         doc = self._open()
+        if assets_dir is not None:
+            Path(assets_dir).mkdir(parents=True, exist_ok=True)
         try:
             pages = len(doc)
             self.stats.pages = pages
@@ -193,26 +293,60 @@ class PdfIngestor:
 
             blocks: list[Block] = []
             toc_entries: list[TocEntry] = []
-            all_samples: list[tuple[float, float]] = []
+
+            # 预判竖排：换行拼接规则依赖排版方向（竖排列边界直接相连；横排要处理跨行断词
+            # 与补空格），**必须先于正文定下来**。前置页常是纯图（表紙），故向后探测到
+            # 攒够 200 个位移样本为止，最多 20 页；这几页结果缓存，主循环不重复算。
+            probe: list[tuple[float, float]] = []
+            cache: dict[int, tuple[str, list[tuple[float, float, float, float]], float]] = {}
+            for pi in range(min(20, pages)):
+                raw, boxes, h, samples = self._page_chars(doc[pi])
+                cache[pi] = (raw, boxes, h)
+                probe.extend(samples)
+                if len(probe) >= 200:
+                    break
+            vertical = detect_vertical(probe)
+            cur_matter = "main"
 
             for pi in range(pages):
                 page = doc[pi]
-                segments, h, samples = self._page_segments(page)
-                all_samples.extend(samples)
+                if pi in cache:
+                    raw, boxes, h = cache[pi]
+                else:
+                    raw, boxes, h, _samples = self._page_chars(page)
+                segments = self._page_segments(raw, boxes, h, vertical=vertical)
+
+                # 本页归类：书签标题优先；书首的**纯图页**（表紙/口絵）没有书签可依，
+                # 按位置判——这是印本 PDF 的稳定版式约定。
+                page_matter = cur_matter
+                for _lvl, _t in by_page.get(pi, []):
+                    page_matter = classify_matter("", _t)
+                if not segments and pi < 3:
+                    page_matter = "cover" if pi == 0 else "front"
+
+                # 图片要在"无文字的页"判断之前处理：**纯插图页没有文字**，
+                # 若先 continue 会整页漏掉插画（实测：只抽到最后一页的小图，应为 28 张）。
+                if assets_dir is not None:
+                    for name in self._page_images(page, Path(assets_dir), pi):
+                        self.stats.images += 1
+                        blocks.append(Block(id=self._next_id(), type="image", path=name,
+                                            source_ref=f"p{pi + 1}", matter=page_matter))
                 if not segments:
                     continue
 
                 # 章节标题（来自书签）在本页开始时先落标题块
                 for lvl, title in by_page.get(pi, []):
                     bid = self._next_id()
+                    cur_matter = classify_matter("", title)
                     blocks.append(Block(id=bid, type="heading", level=lvl, text=title,
-                                        src="bookmark", source_ref=f"p{pi + 1}"))
+                                        src="bookmark", source_ref=f"p{pi + 1}",
+                                        matter=cur_matter))
                     toc_entries.append(TocEntry(level=lvl, title=title, href=f"p{pi + 1}",
                                                 block_id=bid))
                     self.stats.headings += 1
 
                 page_titles = [t for _, t in by_page.get(pi, [])]
-                paras = segments_to_paragraphs(segments, h)
+                paras = segments_to_paragraphs(segments, h, vertical=vertical)
                 for p in paras:
                     if len(p) < self.min_chars:
                         continue
@@ -224,10 +358,11 @@ class PdfIngestor:
                     self.stats.ruby_runs += len(_KANA_RUN.findall(p))
                     self.stats.paragraphs += 1
                     blocks.append(Block(id=self._next_id(), type="paragraph", text=p,
-                                        src="body", source_ref=f"p{pi + 1}"))
+                                        src="body", source_ref=f"p{pi + 1}",
+                                        matter=cur_matter))
                 self.stats.chars += sum(len(t) for t, _ in segments)
 
-            self.stats.vertical = detect_vertical(all_samples)
+            self.stats.vertical = vertical
             return DocumentIR(
                 doc=DocMeta(id=self.doc_id or _slug(meta_title or self.path.stem),
                             title=meta_title, author=meta_author, source_lang="ja",

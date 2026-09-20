@@ -20,9 +20,23 @@ from typing import Any
 from lxml import etree
 
 from transbook.ir import Block, DocumentIR, DocMeta, InlineSpan, TocEntry
-from transbook.textutil import count_rt, is_blank_block, localname, text_without_rt
+from transbook.textutil import (classify_matter, count_rt, is_blank_block,
+                                localname, text_without_rt)
 
 XHTML_TYPES = ("application/xhtml+xml", "text/html")
+XLINK_NS = "http://www.w3.org/1999/xlink"
+EPUB_TYPE_NS = "http://www.idpf.org/2007/ops"
+#: 脚注判定线索（EPUB3 标准写法 + 常见阅读器/制作工具的类名）
+_NOTE_HINT = re.compile(r"footnote|endnote|doc-footnote|注釈|脚注|註", re.I)
+
+
+def _is_footnote(el: Any) -> bool:
+    """该元素是否是脚注容器（`<aside epub:type="footnote">` 及其变体）。"""
+    if localname(el.tag) not in ("aside", "div", "section"):
+        return False
+    return bool(_NOTE_HINT.search(el.get(f"{{{EPUB_TYPE_NS}}}type") or "")
+                or _NOTE_HINT.search(el.get("role") or "")
+                or _NOTE_HINT.search(el.get("class") or ""))
 _IMG_EXT = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
 _VERTICAL = re.compile(r"writing-mode\s*:\s*vertical|vertical-rl|vertical-lr", re.I)
 _HEAD_CLASS = re.compile(r"bold|mfont|font-1[0-9]{2}per|title|heading|midashi", re.I)
@@ -86,6 +100,18 @@ def _spans_of(el: Any) -> list[InlineSpan]:
             if t:
                 spans.append(InlineSpan(kind="strong", text=t))
     return spans
+
+
+def _noterefs(el: Any) -> list[str]:
+    """收集块内的脚注引用锚点（`<a epub:type="noteref" href="#fn1">` → `fn1`）。"""
+    out: list[str] = []
+    for a in el.iter():
+        if not isinstance(a.tag, str) or localname(a.tag) != "a":
+            continue
+        href = a.get("href") or ""
+        if href.startswith("#") and len(href) > 1:
+            out.append(href[1:])
+    return out
 
 
 class EpubIngestor:
@@ -274,9 +300,18 @@ class EpubIngestor:
         body = next((e for e in root.iter() if localname(e.tag) == "body"), None)
         if body is None:
             return None, ""
+        # 前后附页归类：整个 XHTML 文件同属一类（封面/口絵/目次/奥付/广告…），
+        # 先记下起始下标，正文处理完统一盖章，避免每处 Block 构造都传一遍。
+        matter = classify_matter(inner, title)
+        matter_from = len(blocks)
         head_id: str | None = None
         head_text = ""
         head_emitted = False
+        # 已并入脚注/表格子树的元素，避免重复产出。
+        # **必须持有强引用**：lxml 的元素是代理对象，一旦被回收，`id()` 会被后续
+        # 新代理复用，导致无关元素被误判为"已处理"而整块丢掉（实测脚注就是这么消失的）。
+        claimed: list[Any] = []
+        claimed_ids: set[int] = set()
 
         # 标题块：优先用 NAV 锚点定位；找不到锚点则用 NAV 标题直接生成
         if title and not frag:
@@ -288,6 +323,8 @@ class EpubIngestor:
 
         for el in body.iter():
             if not isinstance(el.tag, str):
+                continue
+            if id(el) in claimed_ids:  # 已被脚注/表格整棵收纳，不再单独产出块
                 continue
             tag = localname(el.tag)
             if tag in ("html", "body", "head", "script", "style", "title"):
@@ -301,14 +338,39 @@ class EpubIngestor:
                                     src="nav", source_ref=inner, spans=_spans_of(el)))
                 head_emitted = True
                 continue
-            if tag == "img":
-                src = el.get("src") or ""
-                if src:
+            # ② 脚注（M2）：整块收成一个 footnote 块，子树不再重复产出
+            if _is_footnote(el):
+                text = text_without_rt(el)
+                self._ruby_dropped += count_rt(el)
+                if text:
+                    blocks.append(Block(id=self._next_id(), type="footnote", text=text,
+                                        note_id=el.get("id") or "", src="note",
+                                        source_ref=inner, spans=_spans_of(el)))
+                claimed.extend(el.iter())
+                claimed_ids.update(id(d) for d in claimed)
+                continue
+            # ③ 表格（M2）：保留行列结构（含合并信息），否则整张表会被丢弃
+            if tag == "table":
+                rows, spans = self._table_rows(el)
+                if any(c.strip() for r in rows for c in r):
+                    cap = next((text_without_rt(c) for c in el.iter()
+                                if localname(c.tag) == "caption"), "")
+                    blocks.append(Block(id=self._next_id(), type="table", rows=rows,
+                                        cell_spans=spans, caption=cap, src="body",
+                                        source_ref=inner))
+                claimed.extend(el.iter())
+                claimed_ids.update(id(d) for d in claimed)
+                continue
+            if tag in ("img", "image"):
+                # `<img src>` 覆盖正文插图；**整页图走的是 `<svg><image xlink:href>`**
+                # （封面/裏表紙/口絵/扉絵/广告页）。只认 `<img>` 会让这 10/22 张图
+                # 只被打包、从不显示——实测真实样书踩过。
+                src = (el.get("src") or el.get("href")
+                       or el.get(f"{{{XLINK_NS}}}href") or "")
+                if src and not src.startswith("data:"):
                     blocks.append(Block(id=self._next_id(), type="image",
                                         path=src.replace("\\", "/"), source_ref=inner))
                 continue
-            if tag == "table":
-                continue  # M2 处理
             if tag == "p" or (tag == "div" and text_without_rt(el) and not list(el)):
                 text = text_without_rt(el)
                 self._ruby_dropped += count_rt(el)
@@ -325,8 +387,42 @@ class EpubIngestor:
                     head_emitted = True
                     continue
                 blocks.append(Block(id=self._next_id(), type="paragraph", text=text,
-                                    src="body", source_ref=inner, spans=_spans_of(el)))
+                                    src="body", source_ref=inner, spans=_spans_of(el),
+                                    refs=_noterefs(el)))
+        for b in blocks[matter_from:]:
+            b.matter = matter
         return head_id, head_text
+
+    @staticmethod
+    def _table_rows(el: Any) -> tuple[list[list[str]], list[list[list[int]]]]:
+        """把 `<table>` 抽成行列文本 + 合并信息。
+
+        **不能只取纯文本**：表格一旦被压成一串字，行列对应关系就丢了，
+        译文也就无法还原成表格。合并单元格的 `rowspan/colspan` 一并记下。
+        """
+        rows: list[list[str]] = []
+        spans: list[list[list[int]]] = []
+        for tr in el.iter():
+            if localname(tr.tag) != "tr":
+                continue
+            cells: list[str] = []
+            sp: list[list[int]] = []
+            for td in tr:
+                if not isinstance(td.tag, str) or localname(td.tag) not in ("td", "th"):
+                    continue
+                cells.append(text_without_rt(td))
+
+                def _n(attr: str) -> int:
+                    try:
+                        return max(1, int(td.get(attr) or 1))
+                    except (TypeError, ValueError):
+                        return 1
+
+                sp.append([_n("rowspan"), _n("colspan")])
+            if cells:
+                rows.append(cells)
+                spans.append(sp)
+        return rows, spans
 
     def _extract_images(self, z: zipfile.ZipFile, opf_dir: str,
                         manifest: dict[str, dict[str, str]], assets_dir: Path) -> None:

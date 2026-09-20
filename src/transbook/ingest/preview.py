@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from transbook.ir import DocumentIR
+from transbook.textutil import SKIP_MATTER
 
 
 def to_markdown(ir: DocumentIR, limit: int | None = None, with_toc: bool = True) -> str:
@@ -25,6 +26,13 @@ def to_markdown(ir: DocumentIR, limit: int | None = None, with_toc: bool = True)
                f"图片 {c.get('image', 0)} |")
     out.append(f"| 剥离注音 | {ir.doc.ruby_dropped} 处 `<rt>` |")
     out.append(f"| 可翻译块 | {len(ir.translatable())} |")
+    # 前后附页归类：非 main 的类别单独列出，便于决定是否翻译（版权页/广告默认跳过）
+    mc = ir.matter_counts()
+    if set(mc) - {"main"}:
+        parts = " ｜ ".join(f"{k} {v}" for k, v in sorted(mc.items()) if k != "main")
+        n_skip = len(ir.skipped_matter_blocks(SKIP_MATTER))
+        out.append(f"| 附页归类 | {parts} |")
+        out.append(f"| 默认跳过翻译 | {n_skip} 块（{'、'.join(SKIP_MATTER)}） |")
     out.append("")
 
     if with_toc and ir.toc:

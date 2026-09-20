@@ -100,3 +100,46 @@ def test_record_translation_does_not_touch_final(db):
     row = db.execute("SELECT * FROM segment WHERE seg_id='testdoc:b000002'").fetchone()
     assert row["translation"] == "机器译文"
     assert row["final_translation"] == "人工定稿"
+
+
+# ── 重抽取 / 块序漂移 ───────────────────────────────────────────────
+def test_reimport_after_block_shift_never_mismatches(db):
+    """块序漂移后，**任何一段的译文都必须与它自己的原文对应**。
+
+    真实踩坑：给 EPUB 补上漏抽的 SVG 插图块后，`block_id` 整体后移，
+    旧实现只改 `source_text` 却留着旧译文 → 3372 段的译文全部错配，
+    而且 `status` 仍是 `done`，从状态上完全看不出来。
+    """
+    import_ir(db, make_ir())
+    # 模拟"已翻译"：译文可从 TM 按 text_hash 复现
+    for r in db.execute("SELECT seg_id, source_text, text_hash, source_lang FROM segment"):
+        record_translation(db, r["seg_id"], f"译:{r['source_text']}", engine="deepseek")
+
+    def mismatches() -> int:
+        return db.execute(
+            "SELECT COUNT(*) FROM segment s JOIN tm "
+            "  ON tm.text_hash=s.text_hash AND tm.target_lang='zh' "
+            "WHERE s.status='done' AND IFNULL(s.final_translation, s.translation) <> tm.translation"
+        ).fetchone()[0]
+
+    assert mismatches() == 0
+
+    # 重新导入：开头**插入一个正文块**，后面所有 block_id 整体后移一位
+    texts = ["新しく足した段落。", "第一章 序", "最初の段落です。", "二番目の段落です。"]
+    shifted = DocumentIR(
+        doc=DocMeta(id="testdoc", title="测试", source_lang="ja", origin="epub"),
+        blocks=[Block(id=f"b{i:06d}", type="paragraph", text=t)
+                for i, t in enumerate(texts, start=1)]
+        + [Block(id="b000099", type="image", path="images/x.png")],
+    )
+    st = import_ir(db, shifted)
+
+    assert st.updated == 3, "三段原文都换了 seg_id"
+    assert st.created == 1, "新增的段落是新段"
+    assert mismatches() == 0, "旧译文必须被清掉，而不是留在新原文上"
+    rows = db.execute("SELECT status, COUNT(*) c FROM segment GROUP BY status").fetchall()
+    got = dict((r["status"], r["c"]) for r in rows)
+    assert got == {"done": 3, "pending": 1}, "已有 TM 的三段应被回填，新段保持待译"
+    row = db.execute("SELECT * FROM segment WHERE seg_id='testdoc:b000003'").fetchone()
+    assert row["source_text"] == "最初の段落です。"
+    assert row["translation"] == "译:最初の段落です。", "译文必须跟着原文走"

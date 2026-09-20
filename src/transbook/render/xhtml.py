@@ -38,6 +38,12 @@ figure { margin: 1.2em 0; text-align: center; page-break-inside: avoid; }
 img { max-width: 100%; height: auto; }
 figcaption { font-size: .85em; color: #666; margin-top: .4em; }
 nav[epub|type~="toc"] ol { list-style: none; padding-left: 1em; }
+table.tbl { border-collapse: collapse; margin: 1em 0; font-size: .92em; width: 100%; }
+table.tbl td, table.tbl th { border: 1px solid #bbb; padding: .3em .5em; text-indent: 0; }
+table.tbl caption { font-size: .88em; color: #666; margin-bottom: .3em; }
+aside.footnote { font-size: .85em; color: #555; margin: .6em 0; padding-left: 1em;
+       border-left: 2px solid #ddd; text-indent: 0; }
+sup a.noteref { text-decoration: none; font-size: .75em; vertical-align: super; }
 """
 
 
@@ -89,6 +95,17 @@ def _html_doc(lang: str, title: str, body_children: list[etree._Element]) -> byt
                           doctype='<!DOCTYPE html>')
 
 
+def _with_noterefs(p: etree._Element, refs: list[str]) -> etree._Element:
+    """在段落末尾补上脚注跳转上标（`[1]`），指向 `<aside id="…">`。"""
+    for i, ref in enumerate(refs, start=1):
+        sup = _el("sup")
+        a = _el("a", href=f"#{ref}", **{"class": "noteref"})
+        a.text = f"[{i}]"
+        sup.append(a)
+        p.append(sup)
+    return p
+
+
 def build_chapters(ir: DocumentIR, translations: dict[str, str], mode: Mode = "bilingual",
                    lang_src: str | None = None, lang_tgt: str = "zh") -> list[Chapter]:
     """把 IR 切成章节 XHTML。
@@ -133,12 +150,54 @@ def build_chapters(ir: DocumentIR, translations: dict[str, str], mode: Mode = "b
                 _append_text(fig, "figcaption", b.caption)
             cur.append(fig)
             continue
+        if b.type == "table":
+            # 表格按**单元格**取译文（unit id = `{block_id}:r{r}c{c}`），结构照原样重建
+            tbl = _el("table", **{"class": "tbl"})
+            if b.caption:
+                _append_text(tbl, "caption", b.caption)
+            for r, row in enumerate(b.rows):
+                tr = _el("tr")
+                for c, cell in enumerate(row):
+                    tgt = translations.get(f"{b.id}:r{r}c{c}", "").strip()
+                    td = _el("td")
+                    if mode == "zh":
+                        td.text = tgt or cell  # 缺译也保留原文，避免表格错位
+                    else:
+                        _append_text(td, "span", cell, **{"class": "bi-src", "xml:lang": lang_src})
+                        if tgt:
+                            _append_text(td, "span", tgt, **{"class": "bi-tgt",
+                                                             "xml:lang": lang_tgt})
+                    if r < len(b.cell_spans) and c < len(b.cell_spans[r]):
+                        rs, cs = b.cell_spans[r][c]
+                        if rs > 1:
+                            td.set("rowspan", str(rs))
+                        if cs > 1:
+                            td.set("colspan", str(cs))
+                    tr.append(td)
+                tbl.append(tr)
+            cur.append(tbl)
+            continue
+        if b.type == "footnote":
+            tgt = translations.get(b.id, "").strip()
+            aside = _el("aside", **{"class": "footnote", "role": "doc-footnote"})
+            if b.note_id:
+                aside.set("id", b.note_id)
+            if mode == "zh":
+                if not tgt:
+                    continue
+                aside.text = tgt
+            else:
+                _append_text(aside, "p", b.text, **{"class": "bi-src", "xml:lang": lang_src})
+                if tgt:
+                    _append_text(aside, "p", tgt, **{"class": "bi-tgt", "xml:lang": lang_tgt})
+            cur.append(aside)
+            continue
         if b.type not in ("paragraph", "footnote"):
             continue
         tgt = translations.get(b.id, "").strip()
         if mode == "zh":
             if tgt:
-                cur.append(_append_text(_el("p"), "p", tgt))
+                cur.append(_with_noterefs(_append_text(_el("p"), "p", tgt), b.refs))
             continue
         # 双语：原文 + 译文成对
         wrap = _el("div", **{"class": "bi"})

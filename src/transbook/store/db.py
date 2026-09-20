@@ -7,6 +7,8 @@
 * **`text_hash` 是 TM 键**：内容寻址。即使将来抽取逻辑变化导致 `block_id` 漂移，
   也能凭 `text_hash` 把旧译文迁移过来（`carry_over_translations`）。
 * **`translation` 永不覆盖**（机翻留痕），审核定稿写 `final_translation`，渲染时优先取定稿。
+  **例外**：原文本身变了（块序漂移/重新抽取）时必须清空译文并退回 `pending`，
+  再由 TM 按 `text_hash` 回填——否则译文会与原文静默错配。
 * **成本字段随段落记录**，便于按章/按引擎核算，并支撑 `--max-cost` 硬护栏。
 """
 
@@ -127,31 +129,41 @@ def import_ir(conn: sqlite3.Connection, ir: DocumentIR, target_lang: str = "zh")
     )
 
     created = updated = skipped = carried = 0
-    order_of: dict[str, int] = {}
-    for idx, block in enumerate(ir.blocks):
-        order_of[block.id] = idx
-
-    for idx, block in enumerate(ir.blocks):
-        if block.type not in TRANSLATABLE or not block.text.strip():
+    order = 0
+    for block in ir.blocks:
+        if not block.is_translatable():
             skipped += 1
             continue
-        seg_id = f"{doc.id}:{block.id}"
-        th = text_hash_of(block.text)
-        row = conn.execute("SELECT source_text, status FROM segment WHERE seg_id=?", (seg_id,)).fetchone()
-        if row is None:
-            conn.execute(
-                "INSERT INTO segment(seg_id,doc_id,block_id,ord,kind,source_text,text_hash,"
-                "source_lang,status,updated_at) VALUES(?,?,?,?,?,?,?,?, 'pending', ?)",
-                (seg_id, doc.id, block.id, idx, block.type, block.text, th,
-                 doc.source_lang, now),
-            )
-            created += 1
-        else:
-            if normalize_ws(row["source_text"]) != normalize_ws(block.text):
+        # 表格按**单元格**展开成多个翻译单元；其余块就是一单元。
+        # `block_id` 统一指向父块，便于渲染时把整张表还原回去。
+        for uid in block.unit_ids():
+            text = block.unit_text(uid)
+            order += 1
+            if not text.strip():
+                continue
+            seg_id = f"{doc.id}:{uid}"
+            th = text_hash_of(text)
+            row = conn.execute("SELECT source_text, status FROM segment WHERE seg_id=?",
+                               (seg_id,)).fetchone()
+            if row is None:
                 conn.execute(
-                    "UPDATE segment SET source_text=?, text_hash=?, ord=?, kind=?, updated_at=? "
-                    "WHERE seg_id=?",
-                    (block.text, th, idx, block.type, now, seg_id),
+                    "INSERT INTO segment(seg_id,doc_id,block_id,ord,kind,source_text,text_hash,"
+                    "source_lang,status,updated_at) VALUES(?,?,?,?,?,?,?,?, 'pending', ?)",
+                    (seg_id, doc.id, block.id, order, block.type, text, th,
+                     doc.source_lang, now),
+                )
+                created += 1
+            elif normalize_ws(row["source_text"]) != normalize_ws(text):
+                # 原文变了（抽取逻辑调整、块序漂移、或真的修正了文本）→ 旧译文对应的
+                # 是**另一句话**，必须清掉并退回 pending，再由 `carry_over_translations`
+                # 按**新的 text_hash** 从 TM 回填。
+                # 若只改 source_text 而留着旧译文，段落的译文会与原文静默错配
+                # ——实测重抽真实样书时 3372 段全部错配，且从状态上看不出来。
+                conn.execute(
+                    "UPDATE segment SET source_text=?, text_hash=?, ord=?, kind=?, "
+                    "translation=NULL, final_translation=NULL, engine=NULL, model=NULL, "
+                    "status='pending', updated_at=? WHERE seg_id=?",
+                    (text, th, order, block.type, now, seg_id),
                 )
                 updated += 1
             # 原文未变则原样保留（含译文与状态）

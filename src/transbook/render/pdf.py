@@ -58,6 +58,8 @@ class PdfResult:
     paragraphs: int
     images: int
     error: str = ""
+    tables: int = 0
+    footnotes: int = 0
 
 
 def _image_ref(path: str | None) -> str:
@@ -100,7 +102,25 @@ def build_typst(ir: DocumentIR, translations: dict[str, str], *, mode: str = "zh
                 "",
             ]
             continue
-        if b.type not in ("paragraph", "footnote"):
+        if b.type == "table":
+            lines += _typst_table(b, translations, mode)
+            continue
+        if b.type == "footnote":
+            tgt = (translations.get(b.id) or "").strip()
+            if mode == "zh":
+                if not tgt:
+                    continue
+                lines += [f"#text(size: 0.84em, fill: luma(80))[{esc(tgt)}]", ""]
+            else:
+                lines += [
+                    f"#text(size: 0.8em, fill: luma(120))[{esc(b.text)}]",
+                    "",
+                    (f"#text(size: 0.84em, fill: luma(80))[{esc(tgt)}]" if tgt
+                     else "#text(fill: luma(150))[（未译）]"),
+                    "",
+                ]
+            continue
+        if b.type != "paragraph":
             continue
         tgt = (translations.get(b.id) or "").strip()
         if mode == "zh":
@@ -121,6 +141,41 @@ def build_typst(ir: DocumentIR, translations: dict[str, str], *, mode: str = "zh
     return "\n".join(lines), chapters, paragraphs, images
 
 
+def _typst_table(b, translations: dict[str, str], mode: str) -> list[str]:
+    """表格 → Typst `table()`。单元格逐格取译文（unit id = `{block_id}:r{r}c{c}`）。"""
+    ncol = max((len(r) for r in b.rows), default=0)
+    if ncol == 0:
+        return []
+    cells: list[str] = []
+    for r, row in enumerate(b.rows):
+        for c, cell in enumerate(row):
+            tgt = (translations.get(f"{b.id}:r{r}c{c}") or "").strip()
+            if mode == "zh":
+                txt = tgt or cell  # 缺译保留原文，避免表格错位
+            else:
+                txt = f"{cell} / {tgt}" if tgt else f"{cell} / （未译）"
+            rs, cs = 1, 1
+            if r < len(b.cell_spans) and c < len(b.cell_spans[r]):
+                rs, cs = b.cell_spans[r][c]
+            opts = [f"{k}: {v}" for k, v in (("rowspan", rs), ("colspan", cs)) if v > 1]
+            cells.append(f"table.cell({', '.join(opts)})[{esc(txt)}]" if opts
+                         else f"[{esc(txt)}]")
+    out = ["", f"#table(columns: {ncol}, stroke: 0.4pt, inset: 5pt,"]
+    if b.caption:
+        out.append(f"  caption: [{esc(b.caption)}],")
+    out.append("  " + ", ".join(cells) + ",")
+    out.append(")")
+    out.append("")
+    return out
+
+
+def _count_extras(ir: DocumentIR) -> tuple[int, int]:
+    """统计表格 / 脚注块数（`build_typst` 的返回值保持不变，故单独数一遍）。"""
+    t = sum(1 for b in ir.blocks if b.type == "table")
+    f = sum(1 for b in ir.blocks if b.type == "footnote")
+    return t, f
+
+
 def write_typst(work_dir: str | Path, ir: DocumentIR, translations: dict[str, str], *,
                 mode: str = "zh", name: str | None = None) -> PdfResult:
     """把 Typst 源码写到工作目录（图片按相对路径 `assets/` 引用）。"""
@@ -128,8 +183,10 @@ def write_typst(work_dir: str | Path, ir: DocumentIR, translations: dict[str, st
     src, chapters, paragraphs, images = build_typst(ir, translations, mode=mode)
     typ_path = work / (name or f"{ir.doc.id}.{mode}.typ")
     typ_path.write_text(src, encoding="utf-8")
+    tables, footnotes = _count_extras(ir)
     return PdfResult(typ_path=typ_path, pdf_path=None, chapters=chapters,
-                     paragraphs=paragraphs, images=images)
+                     paragraphs=paragraphs, images=images, tables=tables,
+                     footnotes=footnotes)
 
 
 def compile_pdf(typ_path: str | Path, pdf_path: str | Path | None = None) -> PdfResult:
@@ -153,6 +210,7 @@ def render_pdf(work_dir: str | Path, ir: DocumentIR, translations: dict[str, str
     res = write_typst(work_dir, ir, translations, mode=mode)
     compiled = compile_pdf(res.typ_path)
     compiled.chapters, compiled.paragraphs, compiled.images = res.chapters, res.paragraphs, res.images
+    compiled.tables, compiled.footnotes = res.tables, res.footnotes
     return compiled
 
 

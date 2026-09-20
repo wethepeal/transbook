@@ -360,15 +360,18 @@ def render(
     conn = connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT block_id, COALESCE(final_translation, translation) AS t "
+            "SELECT seg_id, COALESCE(final_translation, translation) AS t "
             "FROM segment WHERE COALESCE(final_translation, translation) IS NOT NULL"
         ).fetchall()
     finally:
         conn.close()
-    translations = {r["block_id"]: r["t"] for r in rows}
+    # 键是**翻译单元 id**：`{doc_id}:{unit_id}`；普通块 unit_id 就是 block_id，
+    # 表格则是 `{block_id}:r0c1` 这样的单元格子 id。
+    translations = {r["seg_id"].split(":", 1)[1]: r["t"] for r in rows}
 
     translatable = len(ir.translatable())
-    covered = sum(1 for b in ir.translatable() if translations.get(b.id))
+    covered = sum(1 for b in ir.translatable()
+                  if all(translations.get(u) for u in b.unit_ids()))
     dest = Path(out_dir) if out_dir else work
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -391,6 +394,7 @@ def render(
         else:
             console.print(f"[green]✓[/green] PDF({mode})：{res.pdf_path} "
                           f"｜ {res.chapters} 章 / {res.paragraphs} 段 / {res.images} 图 "
+                          f"/ {res.tables} 表 / {res.footnotes} 注 "
                           f"｜ {res.pdf_path.stat().st_size / 1024:.0f} KB")
 
     console.print(f"  段落覆盖 {covered}/{translatable}"
