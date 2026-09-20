@@ -132,6 +132,32 @@ Z:\AgentPlugins\start-dsh.cmd
 Z:\AgentPlugins\npm-global\pnpm.cmd --dir Z:\AgentPlugins\dsh-home\profiles\web add <包名>
 ```
 
+**本项目的命令**（`tp` = `.venv\Scripts\tp.exe`）：
+
+```powershell
+# 命令行全流程
+tp extract <书> -o data/work/<名>   # 抽取 → book.ir.json + preview.md（人工闸门）
+tp import data/work/<名>            # 入库（TM 复用旧译文）
+tp summarize data/work/<名>         # 按章生成短摘要（供 --rolling-summary）
+tp translate data/work/<名> --rolling-summary   # 翻译
+tp qa      data/work/<名>           # 译文 QA
+tp render  data/work/<名> -m zh --to both       # 出 EPUB + PDF
+tp validate data/work/<名>          # EPUB 校验（内置 + epubcheck）
+
+# Web 界面（M6）：**必须先构建一次**，否则 `tp serve` 只提供接口
+cd web; npm install; npm run build; cd ..
+tp serve --root data/work           # 界面 http://127.0.0.1:8321/ ｜ 接口文档 /docs
+
+# 前端开发模式（热更新，不用每次 build）
+cd web; npm run dev                 # http://127.0.0.1:5173，/api 自动代理到 8321
+```
+
+> ⚠️ **npm，不是 pnpm**：本机 pnpm 的 `pnpm.exe` 被错误硬链接成了 POSIX 二进制
+> （C→Z 迁移后遗症，执行报 "not a valid application"），npm 11.6.1 正常。
+> 前端依赖与构建都走 npm。
+> 另：**Vite 构建需要放宽沙箱**——它内部 `exec('net use')` 探测网络盘，
+> 而沙箱禁止子进程管道 stdio（EPERM）。
+
 ### 3.4 GitHub 令牌
 
 - 存放：用户级环境变量 `GITHUB_PERSONAL_ACCESS_TOKEN`（启动器另有注册表兜底读取）。
