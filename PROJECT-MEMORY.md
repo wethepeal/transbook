@@ -365,10 +365,13 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
     状态/凭据文件写在 `$env:TEMP` 下，下一次调用就找不到（git 表现为
     `unable to get credential storage lock: Permission denied`）。
     需要跨调用复用的东西要放到固定路径。
-21. 🔴 **Windows 上 stdout 被重定向时按 ANSI 代码页编码**（简中=GBK），而 GBK 里没有
-    `✓`(U+2713)、`✗`(U+2717)、`⑪`(U+246A)——rich 一打印就抛 `UnicodeEncodeError`，
-    命令以非零码退出。已在 `cli.py` 与 `build_release.py` 加 `errors="replace"` 兜底。
-    **只在管道 / 重定向 / CI 里踩得到**，直接输出到真实控制台没有问题。
+21. 🔴 **Windows 上 stdout 被重定向时按 ANSI 代码页编码**（简中=GBK、英文 runner=cp1252），
+    GBK 没有 `✓`(U+2713)、`✗`、`⑪`(U+246A)，cp1252 连中文都装不下——一 print 就抛
+    `UnicodeEncodeError` 让命令以非零码退出。**只在管道 / 重定向 / CI 里踩得到**，
+    直接输出到真实控制台没问题。已抽成 `src/transbook/console.py::tolerate_unencodable_output()`，
+    三个调用点（cli / build_release / check_secrets）共用；新脚本 import 一行即可。
+    CI 另设 `PYTHONIOENCODING: utf-8`，否则兜底只会把中文变成 `?????`。
+    **这个坑踩过三次才抽成函数——"下次记得住"这个前提本身就不成立。**
 22. **PowerShell 5.1 读无 BOM 的 `.ps1` 会按 GBK 解码**，中文被解坏后连语法都过不去
     （`tools/verify_install.ps1` 因此必须存成 **UTF-8 with BOM**）。同理，`.cmd` 里的中文
     在不同代码页下都会乱码，所以 `packaging/start.cmd` 刻意只写 ASCII、中文交给 Python。
@@ -466,4 +469,5 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | 2026-09-21 | **补上 `COMPRESS` 实现**（D-059）：定义压缩提示词与 `compress_summary`，对超过每章预算 1.5 倍的摘要就地压一次（失败/变长则保留原样，用量并入记账）。仓库唯一的 F821 清零，ruff 总告警 85 → **80**。测试 295 → **301** 全绿 | agent |
 | 2026-09-21 | **Web 配置页 + 引入设计类 skill**（D-061、D-062）：新增 `#/settings` 与 `/api/config`（密钥脱敏返回、留空即不修改、只提交改动字段）；`config.py` 抽出发写 `.env` 的共用实现，`tp setup` 与 Web 共用。装 4 个第三方 UI 设计 skill 到 `$DSH_HOME/skills`（热加载生效）。修两个既有可访问性缺陷（键盘焦点圈、可访问名夹带打码值）。真实浏览器实测：只改模型时密钥 SHA256 前后一致。测试 301 → **312** 全绿 | agent |
 | 2026-09-21 | **配置页模型下拉框**：「默认模型」改为下拉（选项由后端下发，取自 DeepSeek 官方文档；保留「自定义」给本地端点），并改掉一处过时文案（`deepseek-chat` 已不在官方文档）。加防漂移测试：下拉里的模型必须在 `PRICES` 里有报价。测试 312 → **316** 全绿 | agent |
-| 2026-09-21 | **修 CI + 密钥泄露处置**（D-065、D-066）：CI 自第 5 次运行起一直红，取真实日志定位到我给 `pdf.py` 加的 `zip(strict=True)`（断言错了）；改回 `strict=False` 并补测试字体回退。**并从全历史里清除了一度被写进测试文件的真实 API Key**（`git filter-repo` 重写 37 个提交 + 强推，重新克隆远端验证 0 命中），新增 `tools/check_secrets.py` 接进 CI。Action 升到首个 node24 版本。测试 316 全绿 | agent |
+| 2026-09-21 | **详情页三视图 + 校对页密度 + 列表列宽**（用户确认后实施）：四张卡片收成「概览/产物/作业」标签页（标题统计与运行中作业常驻）；校对页单段 136px→87px、首屏 5→8 段（把每段都占一行的"机器译文"改成开关 + 短段输入框 1 行起）；列表用 colgroup 固定列宽。测试 316 全绿 | agent |
+| 2026-09-21 | **CI 转绿**（D-066 后续）：密钥检查步骤在 CI 上崩在 encoding 上（cp1252 打不出中文），而这已是**第三次**同一坑 → 抽成 `transbook/console.py` 共用，并给 CI 加 `PYTHONIOENCODING=utf-8`。CI run #14 **success**（前两次失败：`zip(strict=True)`、encoding） | agent |
