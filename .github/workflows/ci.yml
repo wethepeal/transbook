@@ -19,6 +19,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
 
+    env:
+      # runner 是英文 Windows，控制台默认 cp1252，Python 往管道里打中文会直接
+      # UnicodeEncodeError。代码里有兜底（transbook/console.py）保证不崩，
+      # 但那样中文会变成 ?????；这里指定 UTF-8，日志才读得懂。
+      PYTHONIOENCODING: utf-8
+
     steps:
       # Action 的版本按它自己 action.yml 里声明的 `runs.using` 选：
       # v4 仍是 node20，已触发 GitHub 的弃用告警；v5 起是 node24。

@@ -33,6 +33,12 @@ import tomllib
 import zipfile
 from pathlib import Path
 
+from transbook.console import tolerate_unencodable_output
+
+# 兜底编码：这里崩溃的往往不是自己的文案，而是被捕获后转印的 npm/vite 输出
+# （vite 会打印 `✓ built in ...`）。原因见 transbook/console.py。
+tolerate_unencodable_output()
+
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
 DIST = ROOT / "dist"

@@ -24,6 +24,12 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 
+from transbook.console import tolerate_unencodable_output
+
+# CI 的英文 runner 上控制台是 cp1252，打印中文会直接 UnicodeEncodeError 让检查以
+# 非零码退出（这个坑本项目已经踩过三次，所以抽成了共享函数）。
+tolerate_unencodable_output()
+
 #: 明确是占位符/示例/测试假值，不算泄露。
 #: 注意 bytes 字面量只能放 ASCII，中文要显式 encode。
 ALLOW = re.compile(

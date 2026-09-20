@@ -22,28 +22,12 @@ from rich.table import Table
 
 from transbook import __version__
 from transbook.config import apply_env_values, env_candidates, env_files_found, env_write_path, load_dotenv
+from transbook.console import tolerate_unencodable_output
 
-
-def _tolerate_unencodable_output() -> None:
-    """让标准输出遇到当前编码表达不了的字符时替换成 `?`，而不是把命令打断。
-
-    为什么需要：stdout 被**重定向**（管道、写文件、CI 采集）时，Windows 上的 Python
-    按 ANSI 代码页编码，简体中文机器上是 GBK——而 GBK 里没有 `✓`(U+2713)、
-    `✗`(U+2717)、`⑪`(U+246A) 这些字符，rich 一打印就抛 UnicodeEncodeError，
-    整条命令以非零码退出。直接输出到真实控制台时走的是控制台 Unicode API，
-    没有这个问题，所以这个坑**只在 `tp ... | ...`、`tp ... > log.txt` 和 CI 里踩得到**
-    （已实测：`rich` 打印 ✓ 到管道 → rc=1）。
-
-    这是兜底而不是替代品：新增输出仍应优先用 GBK 有的字符。
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(errors="replace")
-        except (AttributeError, ValueError):  # 已被包装过 / 不支持重配置
-            pass
-
-
-_tolerate_unencodable_output()
+# 兜底编码：Windows 上输出被管道/重定向捕获时按 ANSI 代码页编码，
+# GBK 装不下 ✓ 这类字符、cp1252 连中文都装不下，一 print 就崩。
+# 具体原因见 transbook/console.py。
+tolerate_unencodable_output()
 
 app = typer.Typer(
     add_completion=False,
