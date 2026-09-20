@@ -19,6 +19,13 @@ from transbook.service.api import create_app, mask_secret
 
 TRACKED = ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "TRANSLATE_MODEL")
 
+#: 测试里用的假密钥，形状与真实密钥一致（`sk-` + 32 位），便于验证打码逻辑。
+#:
+#: **绝不要把真实密钥写进代码**——它会被提交、被推送；而且就算下一次提交把它删掉，
+#: 旧提交的 blob 里仍然留着，仓库一转公开就等于公开了。本项目已经踩过这个坑
+#: （真实密钥一度被写进这个文件并推送，只能重写历史清除，密钥也必须作废重发）。
+FAKE_KEY = "sk-fake00000000000000000000abcdef"
+
 
 @pytest.fixture
 def isolated_env(tmp_path: Path, monkeypatch):
@@ -56,14 +63,14 @@ def client(isolated_env, tmp_path, monkeypatch) -> TestClient:
 def test_mask_secret_keeps_only_ends():
     assert mask_secret("") == ""
     assert mask_secret("short") == "*****"
-    masked = mask_secret("sk-fake00000000000000000000abcdef")
-    assert masked.startswith("sk-045") and masked.endswith("ba86")
-    assert "e3cf43da93c43ee" not in masked
+    masked = mask_secret(FAKE_KEY)
+    assert masked.startswith("sk-fak") and masked.endswith("cdef")
+    assert "000000000000000" not in masked, "打码必须真的盖住中间那段"
 
 
 # ── 读 ──────────────────────────────────────────────────────────────
 def test_get_config_never_returns_secret_plaintext(client: TestClient, isolated_env: Path):
-    secret = "sk-fake00000000000000000000abcdef"
+    secret = FAKE_KEY
     (isolated_env / ".env").write_text(f"DEEPSEEK_API_KEY={secret}\n", encoding="utf-8")
     cfg.load_dotenv.cache_clear()
 
@@ -75,7 +82,7 @@ def test_get_config_never_returns_secret_plaintext(client: TestClient, isolated_
     assert key["secret"] is True
     assert key["is_set"] is True
     assert key["value"] == "", "机密项不能有值字段"
-    assert key["masked"].endswith("ba86")
+    assert key["masked"].endswith("cdef")
 
     # 最要紧的一条：整个响应体里不能出现明文
     assert secret not in r.text, "接口把密钥明文回传了"
