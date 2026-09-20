@@ -144,12 +144,20 @@ tp qa      data/work/<名>           # 译文 QA
 tp render  data/work/<名> -m zh --to both       # 出 EPUB + PDF
 tp validate data/work/<名>          # EPUB 校验（内置 + epubcheck）
 
-# Web 界面（M6）：**必须先构建一次**，否则 `tp serve` 只提供接口
+# 首次配置密钥（写进 .env；发布包的 start.cmd 会自动调它）
+tp setup
+
+# Web 界面（M6）：**源码跑必须先构建一次**，否则 `tp serve` 只提供接口
 cd web; npm install; npm run build; cd ..
 tp serve --root data/work           # 界面 http://127.0.0.1:8321/ ｜ 接口文档 /docs
+tp serve --root data/work --open    # 顺便自动开浏览器
 
 # 前端开发模式（热更新，不用每次 build）
 cd web; npm run dev                 # http://127.0.0.1:5173，/api 自动代理到 8321
+
+# 打包发布（M7）：前端会嵌进 wheel，用户装完即有界面、不需要 Node
+python tools/build_release.py       # → dist/*.whl + dist/*-win64.zip
+powershell -File tools/verify_install.ps1   # 14 项开箱即用检查（沙箱建在 %TEMP%）
 ```
 
 > ⚠️ **npm，不是 pnpm**：本机 pnpm 的 `pnpm.exe` 被错误硬链接成了 POSIX 二进制
@@ -269,6 +277,9 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | D-055 | 2026-09-21 | ✅ **M6 Web GUI**（React 19 + TS 5.9 + Vite 8）：项目列表与上传、进度看板（SSE）、**段落级左右对照校对**、产物下载。构建产物由 `tp serve` 一并托管，无需另起前端服务 | 计划书 M6：不用命令行即可完成上传→翻译→校对→导出 | **前端极简依赖**：只装 react/react-dom，路由用 **hash**（服务端不必为前端路由做回退，刷新不 404），无 UI 框架。`vite.config.ts` 用 `loadEnv` 读 `TRANSBOOK_API` 而**不用 `process`**（否则要引入 `@types/node`）。**踩坑**：① 保存单段后**没更新本地 items** → 「已定稿」标记与「撤销定稿」按钮要整页刷新才出现，用户得不到反馈（**只有真实浏览器操作才会暴露**）；② 前端「撤销定稿」发 `{final_translation: null}` 被后端 400 拒（接口要求显式 `clear: true`，语义更明确）→ 补 `clearSegment`；③ 段落搜索漏了 `final_translation` 列，人在界面改完就搜不到自己的句子；④ 产物下载只注册 GET → HEAD 返回 405（链接检查器/断点续传客户端会先发 HEAD）→ 改 `api_route(methods=["GET","HEAD"])`。真实浏览器（Playwright）验收：项目列表 4 项带真实产物名、详情页统计（块 3244/已译 3349/封面/花费 ¥0.8242）、校对页 3349 段分 84 页、**界面改一段→保存→SQLite 落库且机翻未被覆盖→可搜索→撤销回到机翻**、产物下载 200（EPUB `PK` / PDF `%PDF-…%%EOF`）、目录穿越 404、**0 条浏览器 console 错误** |
 | D-056 | 2026-09-21 | 🏁 **M0–M6 交付说明**（`docs/DELIVERY.md`）+ **用全新一本书（44 卷）做交付前回归**。手册里每条命令都实际执行验证过 | 用户要在真实本地环境作为使用者测试整套项目 | **回归一口气挖出三个缺陷**，全部修掉并加回归测试：① 🔴 **滚动摘要的进度回调签名不一致**——`generate_summaries` 用**单参**调用，而 CLI 与 `service.pipeline` 传的都是**双参** lambda（M5 期间批量替换 translate 的 lambda 时连带改坏了它），第一次回调即抛 `TypeError`，整轮只生成 1 章就中断；症状是「摘要 2.5 秒只出 1 条、且是『表紙』」。修法：统一为 `(message, fraction)` 并加**签名一致性测试**。② 🔴 **`chapter_spans` 只看标题层级、不看标题自身的附页类别**，于是「表紙」「CONTENTS」被当成章节，夹在它们之间的版权页文字还被算进「表紙」那一章，结果给版权声明写了一份前情提要。修法：非正文标题不开启新章。③ 🔴 **JSON 解析失败直接终止整批且不重试**——实测一本书白丢 30 段（错误是 `Expecting ',' delimiter`）。修法：`TranslationFormatError` 视为**可重试**（换强指令提示词），网络/鉴权类错误则立即判失败不空等；`STRICT_SUFFIX` 同时覆盖"禁止原样返回原文"与"必须是合法 JSON"。另加：单章摘要失败**跳过继续**而不是中断整轮，重跑自动补齐 |
 
+| D-057 | 2026-09-21 | ✅ **发布形态：前端嵌进 wheel + 一键启动包**。`hatch_build.py`（hatchling 构建钩子）把 `web/dist` 映射成 wheel 内的 `transbook/web/dist`——该路径正好落在 `find_web_dist()` 的向上查找链上，运行期零配置就能找到界面。新增 `tools/build_release.py`（前端 → wheel → Release zip，并在打包后**拆开 wheel 复核里面真有界面**）、`packaging/start.cmd`、`packaging/README.txt`、`.github/workflows/{ci,release}.yml` | 用户要求"克隆到私人电脑 + 包安装开箱即用、不折腾命令行" | **刻意不用 pyproject 的 `force-include` 表**：实测前端缺失时它直接抛 `FileNotFoundError`，把 `uv sync` 与 `uv build` 双双打挂——而全新 clone 恰恰没有 `web/dist`（它在 .gitignore 里）。钩子改成"有就嵌入、没有就跳过并告警"。另修一个装包后必然踩到的坑：`PROJECT_ROOT = parents[2]` 在 wheel 里会算成 `site-packages` 的上一级，`.env` **永远读不到** → `env_candidates()` 增加"当前工作目录"与 `%APPDATA%\transbook`，优先级 ProjectRoot > cwd > AppData。**`start.cmd` 刻意只写 ASCII**：实测 UTF-8 无 BOM / 带 BOM / 加 `chcp 65001` 三种写法重定向后字节**完全相同**，无法靠选编码保证安全，故把中文全部交给 Python（走控制台 Unicode API） |
+| D-058 | 2026-09-21 | 🔴 **修复存量缺陷：输出被重定向时 GBK 之外的字符会让命令直接崩**。Windows 上 stdout 是管道/文件时按 ANSI 代码页（简中=GBK）编码，而 GBK 里没有 `✓`(U+2713)、`✗`(U+2717)、`⑪`(U+246A)——rich 一打印就抛 `UnicodeEncodeError`，进程以非零码退出 | 打包时 `build_release.py` 转印 npm/vite 输出（vite 会打印 `✓ built in`）当场崩掉，顺着查出来的 | 实测确认：`rich` 打印 `✓` 到管道 → **rc=1**；`tp --help`（某条命令 docstring 里有 `⑪`）走管道同样崩；`①`~`⑩` 在 GBK 里，`⑪` 起不在。修法：`cli.py` 与 `build_release.py` 各加输出编码兜底（`reconfigure(errors="replace")`），把断言换成降级显示；并移除命令 docstring 里的 `⑪⑫⑬`。**直接输出到真实控制台本来就没这个问题**，所以这个坑只在管道 / 重定向 / CI 里才踩得到 |
+
 ---
 
 ## 6. 任务板 / 里程碑
@@ -291,6 +302,7 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | M4 输出完善（EPUB3 校验、Typst PDF 排版、审核回流 export/apply-review） | ✅ **完成**：EPUB3 + PDF(Typst) + 审核回流 + **封面页 + epubcheck 校验**（D-050/D-051，4 个成品 epubcheck 0 错 0 警） |
 | M5 服务化（FastAPI + 任务队列 + SSE 进度） | ✅ **完成**：`tp serve` + 13 个 HTTP 路由 + 子进程作业 + SSE；验收三项真机通过（D-054） |
 | M6 Web GUI（项目管理 / 段落级对照校对 / 导出） | ✅ **完成**：React + TS + Vite，`tp serve` 一并托管；真实浏览器验收通过（D-055） |
+| M7 分发与打包（前端进 wheel、一键启动包、CI 自动发布） | ✅ **完成**：`hatch_build.py` + `tools/build_release.py` + `packaging/start.cmd` + GitHub Actions；干净环境实测 **14/14 通过**（D-057 / D-058） |
 
 ---
 
@@ -355,6 +367,9 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 - [ ] 视需要启用 §3.5 的候选插件
 - [ ] `git init` 与分支/提交规范（待用户确认）
 - [ ] 回答 §1.2 的项目问题并补全 §1、§2、§4
+- [ ] **ruff 存量告警 85 个**（`src` 59 / `tests` 30；其中 23 个 B008 是 Typer/FastAPI 默认参数的**误报**）：清理掉之后 CI 里的 lint 步骤就能从"信息性"改成"阻断"
+- [ ] `translate/summary.py::build_compress_messages` 引用了**未定义的 `COMPRESS`**，且全仓库无人调用它——需要决定"补实现"还是"删除"
+- [ ] 仓库地址到手后上传 GitHub（用户已确认最终会转为**公开**；上传前再审一遍全部提交信息）
 
 ---
 
@@ -411,3 +426,5 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | 2026-09-21 | **M3 引擎对比 + M3 收尾**（D-053）：`tp compare` + 本地 Qwen3-8B 实测（繁体/片假名残留/未译 明显劣于 DeepSeek，且慢 7.7 倍）→ **本地不作主译**。修本地端点计费（虚假花费 + 误停护栏）；新增繁体/日文汉字检测（并修掉首版的 5 条简繁同形字误报）；提示词 v2→**v3**（明确简体中文）。测试 234 → 248 全绿 | agent |
 | 2026-09-21 | **M5 服务化**（D-054）：FastAPI 服务（13 路由）+ 子进程作业 + SSE 进度 + `tp serve`；抽出 `service/pipeline.py` 让 CLI 与服务共用同一套阶段实现。真机验收：上传 13 MB EPUB → SSE 单调进度 → 导出 3405 行 TSV → 改一行回灌生效。修两个坑：取消排队作业被 worker 覆盖、嵌套进度回调导致进度条倒退。测试 248 → 266 全绿 | agent |
 | 2026-09-21 | **M6 Web GUI**（D-055）：`web/`（React 19 + TS 5.9 + Vite 8，hash 路由、零 UI 框架）——项目列表与上传、进度看板（SSE）、段落级左右对照校对、产物下载；构建产物由 `tp serve` 托管。Playwright 真实浏览器验收通过（改一段→保存→落库→撤销）。修四个坑（保存后无反馈、撤销 400、搜索漏 final_translation、HEAD 405）。测试 266 → 280 全绿 | agent |
+| 2026-09-21 | **M0–M6 交付说明 + 44 卷全新书回归**（D-056）：`docs/DELIVERY.md`（10 节）；回归挖出并修掉三个缺陷（滚动摘要回调签名不一致、`chapter_spans` 把表紙/CONTENTS 当章、JSON 解析失败终止整批不重试） | agent |
+| 2026-09-21 | **M7 分发与打包**（D-057、D-058）：前端嵌进 wheel（`hatch_build.py`）+ `tools/build_release.py`（打包后复核 wheel 内真有界面）+ `packaging/start.cmd`（纯 ASCII）+ GitHub Actions（ci/release）+ 新增 `tp setup` / `tp serve --open`；修两个缺陷：`.env` 在 wheel 安装后读不到、管道输出遇 GBK 外字符直接崩。新增 `tools/verify_install.ps1`（**14 项**开箱即用检查，实测全过）与 `tests/test_packaging.py`（8 项）。测试 287 → **295** 全绿 | agent |

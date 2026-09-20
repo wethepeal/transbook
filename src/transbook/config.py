@@ -24,27 +24,61 @@ KNOWN_KEYS = (
 )
 
 
+def env_candidates() -> list[Path]:
+    """`.env` 的查找位置，按优先级从高到低。
+
+    为什么不止一个：`PROJECT_ROOT` 是 `config.py` 往上数两级，在源码树里正好是项目根，
+    但**装成 wheel 之后会变成 `site-packages` 的上一级（`Lib/`）**，那儿不会有 `.env`。
+    而发布包的实际用法是"用户把书和配置放在一个文件夹里，双击启动"，
+    所以必须同时认当前工作目录，否则装了包的用户配了密钥也读不到。
+    """
+    out: list[Path] = []
+    override = os.environ.get("TRANSBOOK_ENV")
+    if override:
+        out.append(Path(override))
+    out.append(PROJECT_ROOT / ".env")
+    out.append(Path.cwd() / ".env")
+    base = os.environ.get("APPDATA")
+    out.append((Path(base) if base else Path.home() / ".config") / "transbook" / ".env")
+
+    seen: set[str] = set()
+    uniq: list[Path] = []
+    for p in out:
+        key = str(p.resolve())
+        if key not in seen:
+            seen.add(key)
+            uniq.append(p)
+    return uniq
+
+
+def env_files_found() -> list[Path]:
+    """实际存在、且按优先级排序的 `.env`（`tp doctor` 用来告诉用户读的是哪一份）。"""
+    return [p for p in env_candidates() if p.is_file()]
+
+
 @lru_cache(maxsize=1)
 def load_dotenv(path: str | None = None) -> dict[str, str]:
     """读取 `.env`：支持 `KEY=VALUE`、`#` 注释、单双引号；不覆盖已存在的环境变量。
 
-    返回本次从文件加载到的键值（用于诊断显示来源）。
+    显式给了 `path` 就只读那一份；否则按 `env_candidates()` 的顺序全部读一遍，
+    **先读到的键胜出**（`setdefault`）。返回本次从文件加载到的键值（用于诊断显示来源）。
     """
-    target = Path(path) if path else ENV_FILE
+    targets = [Path(path)] if path else env_candidates()
     loaded: dict[str, str] = {}
-    if not target.is_file():
-        return loaded
-    for raw in target.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    for target in targets:
+        if not target.is_file():
             continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if not key:
-            continue
-        loaded[key] = value
-        os.environ.setdefault(key, value)
+        for raw in target.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if not key:
+                continue
+            loaded.setdefault(key, value)
+            os.environ.setdefault(key, value)
     return loaded
 
 

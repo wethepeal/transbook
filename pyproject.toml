@@ -35,6 +35,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/transbook"]
 
+# 前端构建产物（web/dist）在 .gitignore 里，但**必须**进 wheel：
+# 私人电脑上装包即用，不该为了一个界面去装 Node。
+#
+# 这里刻意不用 pyproject 的 `force-include` 表——那张表在前端没构建时直接抛
+# FileNotFoundError，会把 `uv sync` / `uv build` 全打挂（全新 clone 就是这种情况）。
+# 改用 hatch_build.py 钩子：有产物就嵌入，没有就跳过并告警，开发流程不受影响。
+# 发布包由 tools/build_release.py 负责保证前端存在，并在打包后复核 wheel 内容。
+[tool.hatch.build.targets.wheel.hooks.custom]
+
 [tool.ruff]
 line-length = 110
 target-version = "py312"

@@ -21,7 +21,29 @@ from rich.console import Console
 from rich.table import Table
 
 from transbook import __version__
-from transbook.config import load_dotenv
+from transbook.config import env_candidates, env_files_found, load_dotenv
+
+
+def _tolerate_unencodable_output() -> None:
+    """让标准输出遇到当前编码表达不了的字符时替换成 `?`，而不是把命令打断。
+
+    为什么需要：stdout 被**重定向**（管道、写文件、CI 采集）时，Windows 上的 Python
+    按 ANSI 代码页编码，简体中文机器上是 GBK——而 GBK 里没有 `✓`(U+2713)、
+    `✗`(U+2717)、`⑪`(U+246A) 这些字符，rich 一打印就抛 UnicodeEncodeError，
+    整条命令以非零码退出。直接输出到真实控制台时走的是控制台 Unicode API，
+    没有这个问题，所以这个坑**只在 `tp ... | ...`、`tp ... > log.txt` 和 CI 里踩得到**
+    （已实测：`rich` 打印 ✓ 到管道 → rc=1）。
+
+    这是兜底而不是替代品：新增输出仍应优先用 GBK 有的字符。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):  # 已被包装过 / 不支持重配置
+            pass
+
+
+_tolerate_unencodable_output()
 
 app = typer.Typer(
     add_completion=False,
@@ -72,11 +94,18 @@ def doctor() -> None:
     table.add_row(".venv", "存在" if (PROJECT_ROOT / ".venv").is_dir() else "[yellow]不存在[/yellow]")
 
     loaded = load_dotenv()
+    found = env_files_found()
     table.add_row(
         ".env",
         f"已加载 {len(loaded)} 项（{', '.join(sorted(loaded)) or '—'}）"
         if loaded
         else "[dim]无（可用 .env.example 生成）[/dim]",
+    )
+    # 装成 wheel 后 PROJECT_ROOT 不再是项目根，所以要说清楚到底读了哪一份
+    table.add_row(
+        ".env 位置",
+        "\n".join(str(p) for p in found) if found
+        else f"[dim]按顺序找过（均不存在）：{'; '.join(str(p) for p in env_candidates())}[/dim]",
     )
 
     for name in ("DSH_HOME", "UV_CACHE_DIR", "HF_HOME", "PIP_CACHE_DIR", "OLLAMA_MODELS"):
@@ -712,7 +741,7 @@ def compare(
     batch_items: int = typer.Option(16, "--batch-items"),
     price_tier: str = typer.Option("idle", "--price-tier"),
 ) -> None:
-    """⑪ 引擎对比：同一批段落跑两个引擎，看成本/速度/可判定质量。"""
+    """引擎对比：同一批段落跑两个引擎，看成本/速度/可判定质量。"""
     from transbook.config import get
     from transbook.ir import DocumentIR
     from transbook.quality import compare as run_compare
@@ -790,20 +819,97 @@ def compare(
     console.print("\n[dim]质量指标只覆盖可判定问题；语义质量仍需人眼看上面几条对照。[/dim]")
 
 
+def _write_env_key(target: Path, key: str) -> None:
+    """把 `DEEPSEEK_API_KEY` 写进 `.env`，保留文件里其它内容。"""
+    lines = target.read_text(encoding="utf-8").splitlines() if target.is_file() else []
+    out: list[str] = []
+    replaced = False
+    for line in lines:
+        if line.strip().startswith("DEEPSEEK_API_KEY"):
+            out.append(f"DEEPSEEK_API_KEY={key}")
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"DEEPSEEK_API_KEY={key}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+@app.command()
+def setup(
+    key: str = typer.Option("", "--key", help="直接给出密钥，跳过交互询问"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="非交互：没配置也不询问，直接跳过"),
+    force: bool = typer.Option(False, "--force", help="已配置也重新询问"),
+) -> None:
+    """首次配置：把 DeepSeek API Key 写进 .env。
+
+    发布包里的 start.cmd 会自动调用它，所以从压缩包安装的用户不必手敲命令。
+    之所以把这件"要显示中文"的事从批处理挪到 Python：批处理文件里的中文在不同
+    代码页下会乱码，而 Python 在 Windows 上走控制台 Unicode API，怎么都不会乱。
+    """
+    existing = next((p for p in env_candidates() if p.is_file()), None)
+    if existing is None:
+        # 源码树里写项目根；装成 wheel 后 PROJECT_ROOT 不再是项目根，就写当前目录
+        root = PROJECT_ROOT if (PROJECT_ROOT / "pyproject.toml").is_file() else Path.cwd()
+        existing = root / ".env"
+
+    load_dotenv()
+    current = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+
+    if not key and current and not force:
+        console.print(f"[green]已配置密钥[/green]（{existing}，{len(current)} 字符），跳过。")
+        console.print("[dim]要换密钥：tp setup --force[/dim]")
+        return
+    if not key and yes:
+        console.print(f"[yellow]未配置密钥，已跳过。[/yellow]编辑 {existing} 补上即可。")
+        return
+    if not key:
+        console.print("\n需要一个 DeepSeek API Key 才能翻译。申请地址：")
+        console.print("  https://platform.deepseek.com/api_keys\n")
+        key = typer.prompt("粘贴 API Key（直接回车跳过）", default="",
+                           show_default=False).strip()
+
+    if not key:
+        console.print("[yellow]已跳过。[/yellow]没有密钥也能启动，但只能用 Fake 引擎空跑流程。")
+        console.print(f"  以后补上：编辑 {existing}")
+        return
+
+    _write_env_key(existing, key)
+    console.print(f"[green]已写入[/green] {existing}")
+
+
+def _open_browser_soon(url: str, delay: float = 1.5) -> None:
+    """延迟一会儿再开浏览器。
+
+    立刻打开会撞上"uvicorn 还没开始监听"，用户看到的是连接失败页，
+    比不自动打开还糟。1.5 秒在实测里足够。
+    """
+    import threading
+    import webbrowser
+
+    timer = threading.Timer(delay, lambda: webbrowser.open(url))
+    timer.daemon = True
+    timer.start()
+
+
 @app.command()
 def serve(
     root: Path = typer.Option(Path("data/work"), "--root", help="项目根目录（下辖各本书）"),
     host: str = typer.Option("127.0.0.1", "--host", help="监听地址（默认只本机）"),
     port: int = typer.Option(8321, "--port"),
     log_level: str = typer.Option("info", "--log-level"),
+    open_browser: bool = typer.Option(False, "--open/--no-open", help="就绪后自动打开浏览器"),
 ) -> None:
-    """⑫ 启动 HTTP 服务（M5）：提交一本书 / 查进度(SSE) / 交审核。"""
+    """启动 HTTP 服务（M5）：提交一本书 / 查进度(SSE) / 交审核。"""
     try:
         import uvicorn
     except ImportError:  # pragma: no cover
         console.print("[red]未安装 uvicorn（uv add fastapi 'uvicorn[standard]'）[/red]")
         raise typer.Exit(2) from None
-    from transbook.service import create_app
+    from transbook.service import NO_WEB_HINT, create_app
 
     root = root if root.is_absolute() else (Path.cwd() / root)
     root.mkdir(parents=True, exist_ok=True)
@@ -813,10 +919,11 @@ def serve(
     if web:
         console.print(f"  界面    http://{host}:{port}/ ｜ 项目根 {root}")
     else:
-        console.print("  [yellow]界面未构建[/yellow]：在 web/ 下跑 "
-                      "`npm install && npm run build`，或用 `npm run dev` 起开发服务器")
+        console.print(f"  [yellow]界面未构建[/yellow]：{NO_WEB_HINT}")
     console.print(f"  接口文档 http://{host}:{port}/docs")
     console.print("  [dim]作业在独立子进程里跑，服务重启不影响已提交的作业[/dim]")
+    if open_browser and web:
+        _open_browser_soon(f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}/")
     uvicorn.run(app, host=host, port=port, log_level=log_level)
 
 

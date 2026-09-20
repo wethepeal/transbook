@@ -398,19 +398,35 @@ def create_app(root: str | Path = P.DEFAULT_ROOT,
 
         @app.get("/", include_in_schema=False)
         def no_ui() -> Any:
-            return {"detail": "前端未构建：在 web/ 下执行 npm install && npm run build，"
-                              "或用 `npm run dev` 起开发服务器"}
+            return {"detail": NO_WEB_HINT}
 
     return app
 
 
-def find_web_dist(start: str | Path | None = None) -> Path | None:
-    """定位前端构建产物 `web/dist`。
+#: 找不到前端产物时的提示。源码运行和安装运行都会走到这里，
+#: 所以两种补救办法都要说清楚，别让人误以为只能自己去装 Node。
+NO_WEB_HINT = (
+    "前端未构建。源码运行时在 web/ 下执行 `npm install && npm run build`；"
+    "用 uv/pip 安装的**正式发布包自带界面**，若缺失说明装的是未内嵌前端的开发版"
+)
 
-    从当前目录向上找，兼容"在项目根跑"与"在别处跑"两种情况。
+
+def find_web_dist(start: str | Path | None = None) -> Path | None:
+    """定位前端构建产物 `web/dist`（含内嵌在 wheel 里的那一份）。
+
+    从两个方向逐级向上找同名目录，两件事其实是一件事：
+
+    1. **源码树**：从当前工作目录向上找 `web/dist`——覆盖"在项目根跑"与
+       "在 web/ 之外的子目录跑"两种情况。
+    2. **包内嵌**：正式发布包由 `hatch_build.py` 把 `web/dist` 嵌成
+       `transbook/web/dist`，装好后位于 `site-packages/transbook/web/dist`；
+       该路径恰好落在本文件所在目录的向上查找链上，所以无需额外配置。
     """
-    here = Path(start) if start else Path(__file__).resolve()
-    for base in [Path.cwd(), *Path(here).parents]:
+    here = Path(start).resolve() if start else Path(__file__).resolve()
+    roots: list[Path] = [Path.cwd()]
+    roots += [here] if here.is_dir() else []
+    roots += list(here.parents)
+    for base in roots:
         cand = base / "web" / "dist"
         if (cand / "index.html").is_file():
             return cand

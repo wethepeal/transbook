@@ -19,11 +19,15 @@ configs/local.yaml
 
 # ── 产物 ────────────────────────────────────────────────
 out/
+# 本地构建的 wheel 与 Release zip（正式发布走 CI，见 .github/workflows/release.yml）
+/dist/
 *.epub.tmp
 
 # ── 前端（M6）───────────────────────────────────────────
 # node_modules 与构建产物都不入库：`npm install && npm run build` 可完全再生，
 # 而 dist 里带内容哈希的文件名会让每次构建都产生一堆无意义 diff。
+# 注意：不入库 ≠ 不交付。发布时 hatch_build.py 会把 web/dist 嵌进 wheel，
+# 用户 uv/pip 装完即有界面，不必自己装 Node（见 tools/build_release.py）。
 web/node_modules/
 web/dist/
 web/.vite/

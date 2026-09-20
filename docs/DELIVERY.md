@@ -20,6 +20,7 @@
 8. [成本](#8-成本)
 9. [故障排查](#9-故障排查)
 10. [已知限制与未做项](#10-已知限制与未做项)
+11. [分发与打包](#11-分发与打包)
 
 ---
 
@@ -55,7 +56,7 @@ PDF/EPUB   →   DocumentIR   →   SQLite 段落表   →   人工定稿    →
 | Python | 3.12 | ✅ | 用 `uv` 管理虚拟环境 |
 | [uv](https://docs.astral.sh/uv/) | ≥ 0.12 | ✅ | 装依赖（本机在 `Z:\Python\Python_3_12_1\Scripts\uv.exe`） |
 | DeepSeek API Key | — | ✅ | 翻译用；没有也能跑 Fake 引擎验证流程 |
-| Node.js + npm | ≥ 20 | ⭕ | 只在要用 **Web 界面**时需要 |
+| Node.js + npm | ≥ 20 | ⭕ | 只在**从源码构建 Web 界面**时需要；用官方发布包（Release zip）则完全不需要 |
 | Java | ≥ 11 | ⭕ | 只在要跑 **epubcheck** 官方校验时需要 |
 
 ### 2.2 首次安装
@@ -296,12 +297,36 @@ tp compare data/work/我的书 --chapter 3 --limit 40 --sample 4
 
 同一批段落跑两个引擎，给成本 / 速度 / 可判定质量 / 逐条对照。
 
+### 3.13 `tp setup` —— 首次配置（密钥）
+
+```powershell
+tp setup                       # 已配置就跳过；没配置就交互式问一次
+tp setup --key sk-xxxx         # 直接给出，不问
+tp setup --force               # 已配置也重新问（换密钥时用）
+tp setup --yes                 # 非交互：没配置也不问，直接跳过
+```
+
+把 `DEEPSEEK_API_KEY` 写进 `.env`（保留文件里其它内容）。发布包里的 `start.cmd` 会自动调用它，
+所以从压缩包安装的用户不必手敲命令。它存在的另一个理由：让"问密钥"这件**要显示中文**的事
+由 Python 来做——批处理里的中文在不同代码页下会乱码，Python 走 Windows 控制台 Unicode API 不会。
+
+`.env` 的查找顺序（**先命中的胜出**）：
+
+1. `$TRANSBOOK_ENV` 指定的路径
+2. 项目根（源码树）的 `.env`
+3. **当前工作目录**的 `.env`
+4. `%APPDATA%\transbook\.env`
+
+第 3 条是给发布包准备的：装成 wheel 后"项目根"会算成 `site-packages` 的上一级，那里不会有
+`.env`，而用户是把密钥放在启动目录里的。**少了这一条，用户配了密钥也不会生效。**
+
 ---
 
 ## 4. 操作手册 · Web 界面
 
 ```powershell
 tp serve --root data\work            # 界面 http://127.0.0.1:8321/ ｜ 接口文档 /docs
+tp serve --root data\work --open     # 起好之后自动开浏览器（发布包的 start.cmd 用这个）
 ```
 
 | 页面 | 能干什么 |
@@ -466,10 +491,10 @@ Playwright 真实浏览器实测（43 卷，3349 段）：
 ### 6.9 测试
 
 ```
-285 passed ｜ 0 failed
+295 passed ｜ 0 failed
 ```
 
-覆盖抽取（EPUB/PDF/表格/脚注/注音/页眉页脚）、存储与 TM、翻译编排与护栏、渲染（EPUB/PDF）、QA、审核回流、滚动摘要、引擎对比、服务与 Web。**全部零成本**（用 Fake 引擎与合成夹具，不调用 API）。
+覆盖抽取（EPUB/PDF/表格/脚注/注音/页眉页脚）、存储与 TM、翻译编排与护栏、渲染（EPUB/PDF）、QA、审核回流、滚动摘要、引擎对比、服务与 Web、以及**发布形态**（打包相关回归见 §11）。**全部零成本**（用 Fake 引擎与合成夹具，不调用 API）。
 
 ### 6.10 交付前回归：一本全新的书（44 卷）
 
@@ -643,6 +668,9 @@ Translation_Engineering/
 3. **英文 PDF 的跨行断词**用启发式（`trans-` + 小写字母则拼接）。`well-` 换行接 `known` 这类真连字符会被误合，属已知取舍。
 4. **繁体字检测是启发式**（繁体专用字 + 日文专用汉字，阈值 2）。单个繁体字可能是刻意保留的人名用字，故不报。
 5. **计数与实测口径**：`tp translate --dry-run` 的预估约为实际的 **1.7 倍**（系统提示词与真实 token 数开销），保守可用。
+6. **输出被重定向时，GBK 表达不了的字符会降级成 `?`**。Windows 上 stdout 被管道或文件捕获时按 ANSI 代码页编码，而 GBK 里没有 `✓`(U+2713)、`⑪`(U+246A) 这些字符。已在 `cli.py` 加了全局兜底（`errors="replace"`），所以只会显示降级、不会中断命令；直接输出到真实控制台时不受影响。**加兜底之前，`tp ... | ...` 和 `tp ... > log.txt` 会直接以非零码退出**（实测确认）。
+7. **`src/transbook/translate/summary.py` 有一个从未接线的函数**：`build_compress_messages` 引用了未定义的 `COMPRESS`，且全仓库没有任何地方调用它（所以测试全绿也发现不了）。它属于早期"累积式压缩"方案的遗留物，而下方 `build_summary_messages` 的注释明确说明后来放弃了那条路线。保留未删是因为它记录了当时的设计意图；需要时再决定实现还是移除。
+8. **ruff 有 85 个存量告警**（`src` 59 / `tests` 30），其中 23 个是 B008——Typer/FastAPI 默认参数的惯用法，属工具误报。因此 CI 里的 ruff 步骤是**信息性、不阻断**的；清理是独立的一件事，不宜混在功能改动里。
 
 **验证覆盖的边界**：
 
@@ -652,12 +680,111 @@ Translation_Engineering/
 
 ---
 
+## 11. 分发与打包
+
+前面十节讲的是"在源码树里怎么用"。本节讲**怎么把成品送到另一台机器上**——
+目标是那台机器没装过任何开发工具，用户也不需要碰命令行。
+
+### 11.1 两种交付形态
+
+| 形态 | 拿到什么 | 目标机器需要预装 | 适合谁 |
+|---|---|---|---|
+| **源码**（`git clone`） | 仓库 | Python 3.12 + uv + Node（自行构建界面）+ 会敲命令行 | 继续开发的人 |
+| **发布包**（Release zip） | `start.cmd` + wheel | **什么都不用预装** | 只想用的人 |
+
+关键差异：`web/dist`（前端产物）**不进 git**——带内容哈希的文件名会让每次构建产生一堆无意义
+diff。所以 `git clone` 得到的源码**没有界面**，必须自己装 Node 构建一次。发布包则把前端
+**嵌进了 wheel**，装完即有界面。这正是"装包即用"成立的前提。
+
+### 11.2 前端是怎么进 wheel 的
+
+`hatch_build.py`（hatchling 构建钩子）在打包时把 `web/dist` 映射成 wheel 内的
+`transbook/web/dist`。该路径恰好落在 `service/api.py::find_web_dist()` 的向上查找链上
+（`site-packages/transbook/` 之下），所以运行期不需要任何额外配置就能找到界面。
+
+> **为什么不用 pyproject 里的 `force-include` 表**：那张表在前端没构建时直接抛
+> `FileNotFoundError`，而全新 clone 恰恰没有 `web/dist`——结果是 `uv sync` 和 `uv build`
+> 双双失败，开发流程直接断掉。已实测确认。钩子改成"有就嵌入、没有就跳过并告警"，
+> 开发流程永远可用；发布包的完整性由构建脚本复核。
+
+### 11.3 打一个发布包
+
+```powershell
+python tools\build_release.py                  # 前端 → wheel → Release zip
+python tools\build_release.py --skip-frontend  # 前端没改时省时间
+```
+
+产出（都在 `dist/`，该目录不入库）：
+
+| 文件 | 内容 | 体积 |
+|---|---|---|
+| `transbook-0.1.0-py3-none-any.whl` | 主产物，**前端已内嵌** | 204 KB |
+| `transbook-0.1.0-win64.zip` | `start.cmd` + wheel + `README.txt` | 205 KB |
+
+脚本最后会**拆开 wheel 复核里面真有界面**。只检查构建退出码是不够的：钩子在找不到
+`web/dist` 时会跳过并告警，构建照样成功，产物却是个没界面的壳。
+
+> 注意：wheel 只有 200 多 KB，但它依赖的组件（含 Typst 排版引擎，单它一个就 59 MB）
+> 要在安装时下载，**装完约占用 150 MB 磁盘**。首次安装需要联网。
+
+### 11.4 在另一台机器上装（用户视角）
+
+解压 zip，双击 `start.cmd`。它会依次自动完成：找 uv（没有就用官方脚本装进用户目录，
+不需要管理员权限）→ `uv tool install` 装本包 → `tp setup` **用中文**问一次 API Key →
+`tp serve --open` 起服务并打开浏览器。
+
+`start.cmd` **刻意只写 ASCII**：cmd.exe 按当前代码页解码批处理文件的字节，简中机器上是
+GBK，中文会乱码；而 Python 走 Windows 控制台 Unicode API，不受代码页影响。所以面向用户的
+中文全部在 `tp setup` / `tp serve` 里，中文文档在 `README.txt` 里。
+（实测过 UTF-8 无 BOM、UTF-8 带 BOM、UTF-8+`chcp 65001` 三种写法，重定向后字节完全相同，
+**无法靠选编码保证安全**，所以走了这条结构性方案。）
+
+### 11.5 自动发布（GitHub Actions）
+
+`.github/workflows/release.yml`：推 `v*` tag 时自动跑测试 → 构建 → 上传产物 → 建 Release，
+用的是仓库自带的 `GITHUB_TOKEN`，**不需要配置任何 PAT 密钥**。
+`.github/workflows/ci.yml` 在 push / PR 上跑测试与静态检查。
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0        # 之后全自动
+```
+
+### 11.6 验证发布包是可用的（可复现）
+
+```powershell
+powershell -File tools\verify_install.ps1
+```
+
+14 项检查，全过才算数。它刻意把沙箱建在 `%TEMP%`：**在项目目录里测是测不出问题的**——
+那里本来就有 `web/dist`，即使前端没打进 wheel 也会"看起来正常"。而且只看退出码也不够：
+界面缺失时服务照样起得来，只是首页 404。所以脚本真的发 HTTP 请求并核对响应内容。
+
+实测结果（本机，2026-09-17）：
+
+| 检查项 | 结果 |
+|---|---|
+| 沙箱在项目之外 | PASS |
+| wheel 装进干净 venv | PASS |
+| 导入的是 `site-packages` 而非源码 | PASS |
+| 工作目录及全部上级都无 `web/dist` | PASS |
+| `find_web_dist()` 命中**包内嵌**路径 | PASS（`…\site-packages\transbook\web\dist`） |
+| `.env` 写到工作目录、`doctor` 认到密钥 | PASS |
+| 首页 HTTP 200 且是 HTML | PASS |
+| 首页引用打包的 JS、静态资源可取 | PASS（237,600 字节） |
+| `/api/projects` 可用 | PASS |
+| 启动日志中无"界面未构建" | PASS |
+
+**通过 14 项，失败 0 项。**
+
+---
+
 ## 附：一页速查
 
 ```powershell
 # 装
-uv sync; copy .env.example .env   # 填 DEEPSEEK_API_KEY
-cd web; npm install; npm run build; cd ..
+uv sync; tp setup                 # setup 会问一次 DEEPSEEK_API_KEY，写进 .env
+cd web; npm install; npm run build; cd ..      # 从源码跑界面才需要；用发布包则跳过
 
 # 跑（命令行）
 tp extract "书.epub" -o data/work/X     # ① 抽取 → 先看 preview.md！
@@ -671,9 +798,15 @@ tp validate data/work/X                 # ⑨ 校验
 
 # 跑（界面）
 tp serve --root data/work               # → http://127.0.0.1:8321/
+tp serve --root data/work --open        # 顺便自动开浏览器
 
 # 审核
 tp export-review data/work/X -f tsv -o r.tsv   # 改译文列
 tp apply-review  data/work/X r.tsv             # 回灌
 tp clear-review  data/work/X                   # 回滚
+
+# 打包发布
+python tools\build_release.py           # → dist\*.whl + dist\*-win64.zip
+powershell -File tools\verify_install.ps1   # 14 项开箱即用检查
+git tag v0.1.0; git push origin v0.1.0      # CI 自动构建并发布 Release
 ```
