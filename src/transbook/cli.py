@@ -375,7 +375,7 @@ def summarize(
     force: bool = typer.Option(False, "--force", help="全部重新生成（默认沿用已有）"),
     price_tier: str = typer.Option("peak", "--price-tier"),
 ) -> None:
-    """⑩ 滚动摘要：按章生成累积前情提要，供 `tp translate --rolling-summary` 注入。"""
+    """⑩ 滚动摘要：按章生成短摘要，供 `tp translate --rolling-summary` 注入前情。"""
     from transbook.config import get
     from transbook.ir import DocumentIR
     from transbook.store import connect
