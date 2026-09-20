@@ -401,7 +401,8 @@ button.ghost.danger:hover {
   border-color: var(--err);
 }
 button.tiny {
-  padding: 3px 8px;
+  /* 收紧一点：这一段里每行有 2~3 个 tiny 按钮，它们的行高决定了整段头部的高度 */
+  padding: 2px 7px;
   font-size: var(--t-sm);
 }
 .btn.small {
@@ -461,6 +462,70 @@ button.tiny {
 }
 .upload-fields button {
   flex: 0 0 auto;
+}
+
+/* ── 标签页 ─────────────────────────────────────────── */
+/* 下划线式而不是胶囊式：详情页只有一个层级差，胶囊会显得比内容还重 */
+.tabs {
+  display: flex;
+  gap: var(--s-1);
+  border-bottom: 1px solid var(--line);
+  margin: calc(var(--s-2) * -1) 0 var(--s-4);
+}
+.tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--dim);
+  font-weight: 400;
+  padding: var(--s-2) var(--s-3);
+  margin-bottom: -1px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.tab:hover {
+  color: var(--fg);
+  background: transparent;
+  filter: none;
+}
+.tab.active {
+  color: var(--fg-strong);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+.tab.active:hover {
+  background: transparent;
+}
+.tab-count {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-xs);
+  color: var(--dim);
+  background: var(--panel-2);
+  border-radius: var(--r-pill);
+  padding: 0 6px;
+}
+/* 正在跑的作业那块：给它一点强调边框，扫一眼就知道有别的事在跑 */
+.card-live {
+  border-color: var(--accent-soft);
+}
+
+/* ── 项目列表的列宽 ─────────────────────────────────── */
+/* 不约束的话自动布局会把「状态」撑得很宽、把「产物」挤扁（实测截图）。
+   项目名与产物需要弹性，状态与操作固定宽度就够。 */
+.table-projects col.c-name {
+  width: 24%;
+}
+.table-projects col.c-status {
+  width: 88px;
+}
+.table-projects col.c-source {
+  width: 17%;
+}
+.table-projects col.c-action {
+  width: 88px;
 }
 
 /* ── 统计 ───────────────────────────────────────────── */
@@ -760,14 +825,16 @@ button.tiny {
 .segments {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  /* 段落之间只留一点缝：一屏能多看几段，校对时少滚很多 */
+  gap: 6px;
 }
 .seg {
   background: var(--panel);
   border: 1px solid var(--line);
   border-left: 3px solid var(--line);
-  border-radius: var(--r-lg);
-  padding: 10px var(--s-3);
+  /* 重复出现的条目用更紧的圆角，容器才用大的那一档 */
+  border-radius: var(--r-md);
+  padding: 8px 10px;
   transition: border-color var(--dur) var(--ease);
 }
 .seg:hover {
@@ -780,11 +847,11 @@ button.tiny {
 .seg-head {
   display: flex;
   align-items: center;
-  gap: var(--s-2);
+  gap: 6px;
   /* 窄窗口下让按钮换行，而不是把标签压变形 */
   flex-wrap: wrap;
-  row-gap: 6px;
-  margin-bottom: var(--s-2);
+  row-gap: 4px;
+  margin-bottom: 6px;
 }
 .seg-head .mono,
 .seg-head .pill {
@@ -804,12 +871,12 @@ button.tiny {
 }
 .seg .src {
   background: var(--panel-2);
-  border-radius: var(--r-md);
-  padding: var(--s-2) 10px;
+  border-radius: var(--r-sm);
+  padding: 6px 9px;
   /* 原文是文学作品，用衬线；也让"书的内容"和"工具"一眼分得开 */
   font-family: var(--font-book);
   font-size: var(--t-base);
-  line-height: 1.85;
+  line-height: 1.7;
   color: var(--fg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -817,21 +884,18 @@ button.tiny {
 .seg .tgt {
   width: 100%;
   resize: vertical;
-  line-height: 1.8;
+  line-height: 1.7;
+  padding: 6px 9px;
   font-family: var(--font-book);
 }
-.machine {
+/* 展开后的机器译文：只在需要时占高度，默认状态完全不可见 */
+.machine-pop {
   margin-top: 6px;
-}
-.machine summary {
-  cursor: pointer;
-  color: var(--dim);
-  font-size: var(--t-sm);
-}
-.machine .dim {
+  padding: 6px 9px;
+  background: var(--panel-2);
+  border-radius: var(--r-sm);
   font-family: var(--font-book);
-  line-height: 1.8;
-  margin-top: var(--s-1);
+  line-height: 1.7;
 }
 .pager {
   display: flex;

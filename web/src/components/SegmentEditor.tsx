@@ -25,6 +25,9 @@ export default function SegmentEditor({ docId, onError }: Props) {
   const [saved, setSaved] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
+  /** 哪些段落展开了「机器译文」。默认收起——它原本每段都占一行 23px，
+      而多数段落根本不需要看，40 段一页就白占 900 多 px。 */
+  const [showMachine, setShowMachine] = useState<Record<string, boolean>>({})
   const timer = useRef<number | null>(null)
 
   const load = useCallback(
@@ -206,6 +209,8 @@ export default function SegmentEditor({ docId, onError }: Props) {
           {items.map((it) => {
             const isFinal = it.final_translation != null
             const dirty = (draft[it.seg_id] ?? '') !== (saved[it.seg_id] ?? '')
+            const hasMachine = isFinal && !!it.translation && it.translation !== it.final_translation
+            const machineOpen = !!showMachine[it.seg_id]
             return (
               <article key={it.seg_id} className={`seg ${dirty ? 'dirty' : ''}`}>
                 <header className="seg-head">
@@ -215,6 +220,19 @@ export default function SegmentEditor({ docId, onError }: Props) {
                   {isFinal && <span className="pill ok">已定稿</span>}
                   <span className="grow" />
                   {dirty && <span className="warn small">未保存</span>}
+                  {/* 机器译文从"每段一行"改成头部的一个开关 */}
+                  {hasMachine && (
+                    <button
+                      className="ghost tiny"
+                      aria-expanded={machineOpen}
+                      title="展开/收起机器译文"
+                      onClick={() =>
+                        setShowMachine((p) => ({ ...p, [it.seg_id]: !p[it.seg_id] }))
+                      }
+                    >
+                      机器译文
+                    </button>
+                  )}
                   <button className="ghost tiny" disabled={!dirty} onClick={() => void saveOne(it.seg_id)}>
                     保存
                   </button>
@@ -232,17 +250,16 @@ export default function SegmentEditor({ docId, onError }: Props) {
                   <div className="src">{it.source_text}</div>
                   <textarea
                     className="tgt"
-                    rows={Math.max(2, Math.ceil(it.source_text.length / 34))}
+                    // 下限给 1 行：短段（标题、拟声词）本来就只占一行，
+                    // 强制两行纯属浪费纵向空间
+                    rows={Math.max(1, Math.ceil(it.source_text.length / 34))}
                     value={draft[it.seg_id] ?? ''}
                     spellCheck={false}
                     onChange={(e) => setDraft((p) => ({ ...p, [it.seg_id]: e.target.value }))}
                   />
                 </div>
-                {isFinal && it.translation && it.translation !== it.final_translation && (
-                  <details className="machine">
-                    <summary>查看机器译文</summary>
-                    <div className="dim small">{it.translation}</div>
-                  </details>
+                {machineOpen && hasMachine && (
+                  <div className="machine-pop small dim">{it.translation}</div>
                 )}
               </article>
             )

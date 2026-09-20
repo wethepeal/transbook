@@ -73,7 +73,16 @@ export default function ProjectList({ onError }: Props) {
             </p>
           </div>
         ) : (
-          <table className="table">
+          <table className="table table-projects">
+            {/* 固定各列宽度：不约束的话自动布局会把「状态」撑得很宽、
+                把「产物」挤扁（项目名与文件名长短差得很多） */}
+            <colgroup>
+              <col className="c-name" />
+              <col className="c-status" />
+              <col className="c-source" />
+              <col />
+              <col className="c-action" />
+            </colgroup>
             <thead>
               <tr>
                 <th>项目</th>

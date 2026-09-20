@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
-import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -30,7 +29,7 @@ from pathlib import Path
 ALLOW = re.compile(
     rb"sk-x{4,}|sk-xxx+|sk-fake|your[-_]?key|placeholder|example\.com|"
     rb"YOUR_|xxx|\.\.\.|sk-test|sk-verify|sk-from|sk-to-be|sk-keep|1234567890|"
-    rb"CHANGE_?ME|TODO" + "你的".encode("utf-8"),
+    rb"CHANGE_?ME|TODO" + "你的".encode(),
     re.I,
 )
 
