@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,9 +93,29 @@ CREATE TABLE IF NOT EXISTS chapter_summary (
     updated_at    TEXT,
     PRIMARY KEY (doc_id, chapter_index)
 );
+
+-- 后台作业（M5）：状态放库里，**不放在服务进程内存里**。
+-- 这样作业能在独立子进程里跑、服务重启也不丢进度，SSE 只需轮询这张表。
+CREATE TABLE IF NOT EXISTS job (
+    id          TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,          -- full / extract / translate / render / summarize
+    doc_id      TEXT,
+    status      TEXT NOT NULL,          -- queued / running / done / failed / cancelled
+    stage       TEXT,                   -- 当前阶段（给人看的）
+    progress    REAL DEFAULT 0,         -- 0~1
+    message     TEXT,
+    params      TEXT,                   -- JSON
+    result      TEXT,                   -- JSON
+    error       TEXT,
+    pid         INTEGER,
+    created_at  TEXT,
+    started_at  TEXT,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_job_status ON job(status, created_at);
 """
 
-TRANSLATABLE = ("heading", "paragraph", "footnote")
+TRANSLATABLE = ("heading", "paragraph", "footnote", "table")
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
@@ -382,3 +403,70 @@ def prune_summaries(conn: sqlite3.Connection, doc_id: str,
         cur = conn.execute("DELETE FROM chapter_summary WHERE doc_id=?", (doc_id,))
     conn.commit()
     return cur.rowcount or 0
+
+
+# ── 后台作业（M5）───────────────────────────────────────────────────
+#: 终态：作业不会再变，SSE 可以断开
+TERMINAL_STATUS = ("done", "failed", "cancelled")
+#: 允许更新的列（白名单，避免拼 SQL 时被注入）
+_JOB_FIELDS = frozenset({
+    "status", "stage", "progress", "message", "result", "error", "pid",
+    "doc_id", "started_at", "finished_at",
+})
+
+
+def create_job(conn: sqlite3.Connection, kind: str, *, doc_id: str = "",
+               params: dict[str, Any] | None = None, job_id: str | None = None) -> str:
+    """建一条排队中的作业，返回作业 id。"""
+    jid = job_id or uuid.uuid4().hex[:12]
+    conn.execute(
+        "INSERT INTO job(id,kind,doc_id,status,stage,progress,params,created_at) "
+        "VALUES(?,?,?,'queued','排队中',0,?,?)",
+        (jid, kind, doc_id, json.dumps(params or {}, ensure_ascii=False), _now()),
+    )
+    conn.commit()
+    return jid
+
+
+def update_job(conn: sqlite3.Connection, job_id: str, **fields: Any) -> None:
+    """更新作业字段。只接受白名单列，值里的 dict/list 自动转 JSON。"""
+    bad = set(fields) - _JOB_FIELDS
+    if bad:
+        raise ValueError(f"不可更新的作业字段：{sorted(bad)}")
+    if not fields:
+        return
+    sets, args = [], []
+    for k, v in fields.items():
+        sets.append(f"{k}=?")
+        args.append(json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
+    args.append(job_id)
+    conn.execute(f"UPDATE job SET {', '.join(sets)} WHERE id=?", args)
+    conn.commit()
+
+
+def get_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM job WHERE id=?", (job_id,)).fetchone()
+    return _job_dict(row) if row else None
+
+
+def list_jobs(conn: sqlite3.Connection, *, limit: int = 50,
+              doc_id: str | None = None) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM job"
+    args: list[Any] = []
+    if doc_id:
+        sql += " WHERE doc_id=?"
+        args.append(doc_id)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    args.append(limit)
+    return [_job_dict(r) for r in conn.execute(sql, args)]
+
+
+def _job_dict(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    for key in ("params", "result"):
+        if d.get(key):
+            try:
+                d[key] = json.loads(d[key])
+            except (TypeError, ValueError):
+                pass
+    return d

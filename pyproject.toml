@@ -13,6 +13,9 @@ dependencies = [
     "rich>=13.9",
     "typst>=0.15.0",
     "pypdfium2>=5.13.0",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.53.0",
+    "python-multipart>=0.0.32",
 ]
 
 [project.scripts]

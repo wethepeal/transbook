@@ -75,7 +75,7 @@ def run(
     batch_items: int = 24,
     max_rounds: int = 3,
     dry_run: bool = False,
-    progress: Callable[[str], None] | None = None,
+    progress: Callable[[str, float], None] | None = None,
     guard_min_chars: int = GUARD_MIN_CHARS,
     ir=None,
     rolling_summary: bool = False,
@@ -135,7 +135,9 @@ def run(
             rep.stopped = f"已达成本上限 ¥{max_cost}"
             break
         if progress:
-            progress(f"批次 {bi}/{len(batches)}（{len(batch)} 段）")
+            # 回调带**批次占比**：上层（服务/流水线）要把它映射进所属阶段的区间，
+            # 否则嵌套阶段会让进度条倒退（实测 2% → 0% → 92%）。
+            progress(f"批次 {bi}/{len(batches)}（{len(batch)} 段）", bi / len(batches))
         if summaries:
             ctx.rolling_summary = _prev_summary([i.seg_id for i in batch])
 

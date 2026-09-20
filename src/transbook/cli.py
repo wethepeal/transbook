@@ -357,7 +357,7 @@ def translate(
         rep = run(conn, provider, ctx, limit=limit, max_cost=max_cost,
                   batch_chars=batch_chars, batch_items=batch_items, dry_run=dry_run,
                   ir=ir, rolling_summary=rolling_summary,
-                  progress=(None if dry_run else lambda m: console.print(f"  [dim]{m}[/dim]")))
+                  progress=(None if dry_run else lambda m, f: console.print(f"  [dim]{m}[/dim]")))
     finally:
         conn.close()
     console.print(("[green]✓[/green] " if not dry_run else "[cyan]◦[/cyan] ") + rep.summary())
@@ -414,7 +414,7 @@ def summarize(
     try:
         rep = generate_summaries(conn, provider, ir, ctx, budget=budget, window=window,
                                  chapter_chars=chapter_chars, force=force,
-                                 progress=lambda m: console.print(f"  [dim]{m}[/dim]"))
+                                 progress=lambda m, f: console.print(f"  [dim]{m}[/dim]"))
     finally:
         conn.close()
     console.print(f"[green]✓[/green] {rep.summary()}")
@@ -765,7 +765,7 @@ def compare(
                       source_lang=ir.doc.source_lang or "ja")
     console.print(f"[dim]对比 {len(items)} 段（第 {chapter or '全书'} 章区间）…[/dim]")
     rep = run_compare(items, providers, ctx, sample=sample, batch_items=batch_items,
-                      progress=lambda m: console.print(f"  [dim]{m}[/dim]"))
+                      progress=lambda m, f: console.print(f"  [dim]{m}[/dim]"))
 
     console.print(f"\n[bold]成本与速度[/bold]\n{rep.table()}")
     console.print("\n[bold]可判定质量问题[/bold]（数字越小越好）")
@@ -788,6 +788,30 @@ def compare(
             for name, tgt in outs.items():
                 console.print(f"    [cyan]{name}[/cyan]：{tgt[:110] or '（空）'}")
     console.print("\n[dim]质量指标只覆盖可判定问题；语义质量仍需人眼看上面几条对照。[/dim]")
+
+
+@app.command()
+def serve(
+    root: Path = typer.Option(Path("data/work"), "--root", help="项目根目录（下辖各本书）"),
+    host: str = typer.Option("127.0.0.1", "--host", help="监听地址（默认只本机）"),
+    port: int = typer.Option(8321, "--port"),
+    log_level: str = typer.Option("info", "--log-level"),
+) -> None:
+    """⑫ 启动 HTTP 服务（M5）：提交一本书 / 查进度(SSE) / 交审核。"""
+    try:
+        import uvicorn
+    except ImportError:  # pragma: no cover
+        console.print("[red]未安装 uvicorn（uv add fastapi 'uvicorn[standard]'）[/red]")
+        raise typer.Exit(2) from None
+    from transbook.service import create_app
+
+    root = root if root.is_absolute() else (Path.cwd() / root)
+    root.mkdir(parents=True, exist_ok=True)
+    app = create_app(root)
+    console.print(f"[green]transbook 服务[/green] http://{host}:{port}"
+                  f" ｜ 项目根 {root} ｜ 文档 /docs")
+    console.print("  [dim]作业在独立子进程里跑，服务重启不影响已提交的作业[/dim]")
+    uvicorn.run(app, host=host, port=port, log_level=log_level)
 
 
 if __name__ == "__main__":  # pragma: no cover
