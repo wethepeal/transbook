@@ -108,14 +108,16 @@ def doctor() -> None:
 
 @app.command()
 def extract(
-    source: Path = typer.Argument(..., help="输入的 EPUB 文件（PDF 支持在 M2 加入）"),
+    source: Path = typer.Argument(..., help="输入的 .epub 或 .pdf 文件"),
     out: Path = typer.Option(Path("data/work/book"), "--out", "-o", help="输出目录"),
     limit: int | None = typer.Option(None, "--limit", help="预览只输出前 N 个块"),
     no_assets: bool = typer.Option(False, "--no-assets", help="不提取图片"),
     doc_id: str | None = typer.Option(None, "--doc-id", help="文档 ID（默认由书名生成短标识）"),
 ) -> None:
-    """① 抽取：EPUB → DocumentIR(JSON) + Markdown 预览（人工检查闸门）。"""
-    from transbook.ingest import EpubError, EpubIngestor
+    """① 抽取：EPUB / PDF → DocumentIR(JSON) + Markdown 预览（人工检查闸门）。"""
+    import inspect
+
+    from transbook.ingest import EpubError, PdfError, ingestor_for
     from transbook.ingest.preview import summarize, to_markdown
 
     if not source.is_file():
@@ -124,9 +126,12 @@ def extract(
 
     out.mkdir(parents=True, exist_ok=True)
     try:
-        ing = EpubIngestor(source, doc_id=doc_id)
-        ir = ing.extract(assets_dir=None if no_assets else out / "assets")
-    except EpubError as exc:
+        ing = ingestor_for(source, doc_id=doc_id)
+        # EPUB 抽取器支持 assets_dir（提取图片）；PDF 抽取器暂不提取图片
+        ir = (ing.extract(assets_dir=None if no_assets else out / "assets")
+              if "assets_dir" in inspect.signature(ing.extract).parameters
+              else ing.extract())
+    except (EpubError, PdfError, ValueError) as exc:
         console.print(f"[red]抽取失败：{exc}[/red]")
         raise typer.Exit(2) from exc
 
@@ -139,7 +144,8 @@ def extract(
     console.print(f"  IR      : {ir_path}")
     console.print(f"  预览    : {md_path}   ← [bold]请先看这份再翻译[/bold]")
     if ir.doc.vertical:
-        console.print("  [yellow]提示：检测到竖排样式（输出将按中文横排排版）[/yellow]")
+        console.print("  [dim]检测到竖排（縦書き）：抽取顺序已按日文阅读顺序还原，"
+                      "输出按中文横排排版[/dim]")
 
 
 @app.command()
