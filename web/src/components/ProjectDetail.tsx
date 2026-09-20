@@ -148,30 +148,37 @@ export default function ProjectDetail({ docId, onError }: Props) {
 
       <section className="card">
         <h2>最近作业</h2>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>作业</th>
-              <th>类型</th>
-              <th>状态</th>
-              <th>阶段</th>
-              <th>进度</th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((j) => (
-              <tr key={j.id} className={j.id === active ? 'active' : ''}>
-                <td className="mono small">{j.id}</td>
-                <td>{j.kind}</td>
-                <td>
-                  <span className={`pill ${j.status}`}>{j.status}</span>
-                </td>
-                <td className="small">{j.stage}</td>
-                <td className="small">{Math.round((j.progress ?? 0) * 100)}%</td>
+        {/* 空表只剩表头会显得像坏了，给一句说明 */}
+        {jobs.length === 0 ? (
+          <p className="hint">
+            这个项目还没有作业记录（用命令行跑的作业不会登记到界面里）。
+          </p>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>作业</th>
+                <th>类型</th>
+                <th>状态</th>
+                <th>阶段</th>
+                <th>进度</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {jobs.map((j) => (
+                <tr key={j.id} className={j.id === active ? 'active' : ''}>
+                  <td className="mono small nowrap">{j.id}</td>
+                  <td className="nowrap">{j.kind}</td>
+                  <td className="nowrap">
+                    <span className={`pill ${j.status}`}>{j.status}</span>
+                  </td>
+                  <td className="small">{j.stage}</td>
+                  <td className="small nowrap">{Math.round((j.progress ?? 0) * 100)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
     </div>
   )

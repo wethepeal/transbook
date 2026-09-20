@@ -182,6 +182,7 @@ button,
   font-weight: 600;
   cursor: pointer;
   display: inline-block;
+  white-space: nowrap; /* 「校对」这类两字按钮不能被压成两行 */
 }
 button:hover,
 .btn:hover {
@@ -258,13 +259,39 @@ button.tiny {
   font-weight: 500;
   border-bottom: 1px solid var(--line);
   padding: 6px 8px;
+  white-space: nowrap; /* 否则「输入」会被压成两行 */
 }
 .table td {
   border-bottom: 1px solid #21252e;
-  padding: 7px 8px;
+  padding: 7px 10px;
+  vertical-align: top;
 }
 .table tr.active td {
   background: #1b2331;
+}
+/* 不长换行的单元格：标签、按钮、短标识都不该被挤成竖排 */
+.nowrap {
+  white-space: nowrap;
+}
+/* 产物列限宽，避免长文件名把整张表撑变形 */
+.table td.out {
+  max-width: 320px;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.chip {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── 状态标签 ───────────────────────────────────────── */
@@ -275,6 +302,7 @@ button.tiny {
   font-size: 11px;
   border: 1px solid var(--line);
   color: var(--dim);
+  white-space: nowrap; /* 窄列里「可翻译」会被压成一字一行 */
 }
 .pill.done,
 .pill.ok {
@@ -304,10 +332,19 @@ button.tiny {
   gap: 10px;
   font-size: 12px;
   color: var(--dim);
+  min-width: 0;
+}
+.job-stage {
+  /* 阶段文案可能很长（"批次 88/115（30 段）"），给它省略号而不是把百分比挤走 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .job-pct {
   margin-left: auto;
   font-family: var(--mono);
+  white-space: nowrap;
 }
 .bar {
   height: 6px;
@@ -364,11 +401,28 @@ button.tiny {
   align-items: center;
   padding: 4px 0;
 }
+.files li .mono {
+  /* 文件名很长：允许在任意位置断行，否则会把「下载」按钮挤到看不见 */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 /* ── 段落校对 ───────────────────────────────────────── */
 .toolbar {
   align-items: center;
   margin: 0;
+  row-gap: 8px;
+}
+.toolbar-info {
+  margin: 4px 0 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 .segments {
   display: flex;
@@ -389,14 +443,23 @@ button.tiny {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 窄窗口下让按钮换行，而不是把标签压变形 */
+  flex-wrap: wrap;
+  row-gap: 6px;
   margin-bottom: 8px;
+}
+.seg-head .mono,
+.seg-head .pill {
+  white-space: nowrap;
 }
 .seg-body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
-@media (max-width: 900px) {
+/* 只在真的很窄时才改成上下堆叠：左右对照是校对界面的核心价值，
+   900px 明明放得下两栏（实测截图里过早堆叠了） */
+@media (max-width: 720px) {
   .seg-body {
     grid-template-columns: 1fr;
   }

@@ -75,17 +75,32 @@ export default function ProjectList({ onError }: Props) {
             <tbody>
               {projects.map((p) => (
                 <tr key={p.doc_id}>
-                  <td>
+                  <td className="nowrap">
                     <a href={`#/p/${encodeURIComponent(p.doc_id)}`}>{p.doc_id}</a>
                   </td>
-                  <td>
+                  <td className="nowrap">
                     <span className={p.has_db ? 'pill done' : 'pill queued'}>
                       {p.has_db ? '可翻译' : '仅抽取'}
                     </span>
                   </td>
-                  <td className="mono small">{p.source ?? '—'}</td>
-                  <td className="mono small">{p.outputs.join('、') || '—'}</td>
-                  <td className="right">
+                  <td className="mono small nowrap">{p.source ?? '—'}</td>
+                  {/* 产物做成小标签：文件名很长，直接拼成一行会把整列撑开、
+                      挤扁「状态」和操作列（实测截图）。标签内截断、悬停看全名，
+                      完整清单与下载在详情页。 */}
+                  <td className="out">
+                    {p.outputs.length === 0 ? (
+                      <span className="dim">—</span>
+                    ) : (
+                      <div className="chips">
+                        {p.outputs.map((f) => (
+                          <span key={f} className="chip mono" title={f}>
+                            {f}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td className="right nowrap">
                     <a className="btn small" href={`#/p/${encodeURIComponent(p.doc_id)}/review`}>
                       校对
                     </a>

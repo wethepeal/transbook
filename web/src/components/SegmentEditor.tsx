@@ -125,6 +125,8 @@ export default function SegmentEditor({ docId, onError }: Props) {
   return (
     <div className="stack">
       <section className="card sticky">
+        {/* 控件与计数**分两行**：混在一行时窗口一窄就会把按钮挤到第二行、
+            左半边空着，看着像坏了。控件行只放控件，计数另起一行更稳定。 */}
         <div className="row toolbar">
           <input
             className="search"
@@ -138,17 +140,20 @@ export default function SegmentEditor({ docId, onError }: Props) {
             <option value="pending">待译</option>
             <option value="failed">失败</option>
           </select>
-          <span className="hint small">
-            共 {total} 段 ｜ 本页 {items.length} 段 ｜ 未保存{' '}
-            <b className={changed.length ? 'warn' : ''}>{changed.length}</b>
-          </span>
           <span className="grow" />
-          <button disabled={!changed.length || busy} onClick={() => void saveAll()}>
-            {busy ? '保存中…' : `保存本页改动（${changed.length}）`}
-          </button>
-          <button className="ghost" onClick={() => void load(offset)}>
-            重新载入
-          </button>
+          {/* 两个按钮包在一起：窗口变窄时整组换行，而不是把「重新载入」单独丢到下一行 */}
+          <div className="toolbar-actions">
+            <button disabled={!changed.length || busy} onClick={() => void saveAll()}>
+              {busy ? '保存中…' : `保存本页改动（${changed.length}）`}
+            </button>
+            <button className="ghost" onClick={() => void load(offset)}>
+              重新载入
+            </button>
+          </div>
+        </div>
+        <div className="hint small toolbar-info">
+          共 {total} 段 ｜ 本页 {items.length} 段 ｜ 未保存{' '}
+          <b className={changed.length ? 'warn' : ''}>{changed.length}</b>
         </div>
       </section>
 
