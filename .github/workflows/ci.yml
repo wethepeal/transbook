@@ -6,18 +6,27 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 连推几次时，旧的那次已经没有意义了，直接取消，别占着 runner
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: 测试与静态检查
     # 项目是 Windows 专向（PDF/Typst 路径、pypdfium2 原生库都按 Windows 实测），
     # 所以 CI 也跑 Windows，避免"Linux 上绿、Windows 上红"的假阳性。
     runs-on: windows-latest
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      # Action 的版本按它自己 action.yml 里声明的 `runs.using` 选：
+      # v4 仍是 node20，已触发 GitHub 的弃用告警；v5 起是 node24。
+      # 这里取**首个 node24 版本**而不是最新版，把行为变更的风险压到最小。
+      - uses: actions/checkout@v5
 
       - name: 安装 uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 

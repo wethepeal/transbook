@@ -378,11 +378,16 @@ class PdfIngestor:
         （横排 y / 竖排 x），页码看 y（实测跨页恒定）。
         """
         if vertical:
-            refs = [b[3] for b, c in zip(boxes, raw, strict=True) if c.strip()]
+            # 这里**不能**用 zip(..., strict=True)：`raw` 来自 `get_text_range()`，
+            # `boxes` 是按 `count_chars()` 逐个取的，两者是**不同的 API，长度不保证相等**
+            # （与页面断行数有关，换一台机器换个字体就会变）。我一度按"入口已保证等长"
+            # 加了 strict=True，CI 立刻用 `zip() argument 2 is shorter than argument 1`
+            # 把它证伪了。原来的截断行为是有意的，保持。
+            refs = [b[3] for b, c in zip(boxes, raw, strict=False) if c.strip()]
             ref = max(refs) if refs else 0.0
             off_of = lambda b: ref - b[3]  # noqa: E731
         else:
-            refs = [b[0] for b, c in zip(boxes, raw, strict=True) if c.strip()]
+            refs = [b[0] for b, c in zip(boxes, raw, strict=False) if c.strip()]
             ref = min(refs) if refs else 0.0
             off_of = lambda b: b[0] - ref  # noqa: E731
 

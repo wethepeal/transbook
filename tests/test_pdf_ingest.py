@@ -82,6 +82,17 @@ def test_strip_title_prefix():
 
 
 # ── 端到端：自造横排 PDF ────────────────────────────────────────────
+def _pdf_text(path: Path) -> str:
+    """用 pypdfium2 快速取回 PDF 文本，判断这份 PDF 到底渲染出了什么。"""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(path)
+    try:
+        return "".join(page.get_textpage().get_text_range() for page in doc)
+    finally:
+        doc.close()
+
+
 @pytest.fixture
 def sample_pdf(tmp_path: Path) -> Path:
     """用 Typst 造一份两章的横排 PDF（含中文段落），供抽取链路验证。"""
@@ -91,7 +102,11 @@ def sample_pdf(tmp_path: Path) -> Path:
     src = tmp_path / "t.typ"
     src.write_text(
         '#set page(paper: "a5", margin: 18mm)\n'
-        '#set text(font: ("Noto Serif SC",), size: 11pt, lang: "zh")\n'
+        # 字体给一串回退。原来只写 "Noto Serif SC" 一个：CI 的英文 runner 上没装它，
+        # Typst 会静默换成别的字体，字宽不同→断行不同→`get_text_range()` 与
+        # `count_chars()` 的长度不再相等（曾把一处 `zip(strict=True)` 撑爆）。
+        '#set text(font: ("Noto Serif SC", "Microsoft YaHei", "SimSun",'
+        ' "Noto Sans CJK SC", "Arial Unicode MS"), size: 11pt, lang: "zh")\n'
         "= 第一章 测试章节\n\n"
         "这是第一段中文正文，用于验证 PDF 抽取链路能否正确还原段落文本。\n\n"
         "这是第二段中文正文，内容与上一段不同，便于区分。\n\n"
@@ -101,6 +116,11 @@ def sample_pdf(tmp_path: Path) -> Path:
     )
     out = tmp_path / "t.pdf"
     typst.compile(str(src), output=str(out))
+    # 一个中文字体都没有的环境会把汉字渲染成缺字框，抽出来自然没有中文。
+    # 那是**环境渲染不出来**，不是抽取链路的缺陷，所以如实跳过而不是报红——
+    # 否则 CI 会因为"runner 没装字体"长期变红，久而久之就没人看 CI 了。
+    if "第一段" not in _pdf_text(out):
+        pytest.skip("本机没有可用的中文字体，Typst 渲染不出可抽取的中文")
     return out
 
 
