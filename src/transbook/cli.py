@@ -112,6 +112,8 @@ def extract(
     out: Path = typer.Option(Path("data/work/book"), "--out", "-o", help="输出目录"),
     limit: int | None = typer.Option(None, "--limit", help="预览只输出前 N 个块"),
     no_assets: bool = typer.Option(False, "--no-assets", help="不提取图片"),
+    keep_headers: bool = typer.Option(False, "--keep-headers",
+                                      help="不过滤页眉/页脚（PDF 页码、书眉）"),
     doc_id: str | None = typer.Option(None, "--doc-id", help="文档 ID（默认由书名生成短标识）"),
 ) -> None:
     """① 抽取：EPUB / PDF → DocumentIR(JSON) + Markdown 预览（人工检查闸门）。"""
@@ -126,7 +128,8 @@ def extract(
 
     out.mkdir(parents=True, exist_ok=True)
     try:
-        ing = ingestor_for(source, doc_id=doc_id)
+        # `filter_headers` 只有 PDF 抽取器用得上；EPUB 路径忽略它（书里没有页码）
+        ing = ingestor_for(source, doc_id=doc_id, filter_headers=not keep_headers)
         # EPUB 抽取器支持 assets_dir（提取图片）；PDF 抽取器暂不提取图片
         ir = (ing.extract(assets_dir=None if no_assets else out / "assets")
               if "assets_dir" in inspect.signature(ing.extract).parameters
@@ -146,6 +149,10 @@ def extract(
     if ir.doc.vertical:
         console.print("  [dim]检测到竖排（縦書き）：抽取顺序已按日文阅读顺序还原，"
                       "输出按中文横排排版[/dim]")
+    dropped = getattr(getattr(ing, "stats", None), "headers_dropped", 0)
+    if dropped:
+        console.print(f"  [dim]已过滤页眉/页脚 {dropped} 段（页码、书眉）"
+                      f"——要保留请加 --keep-headers[/dim]")
 
 
 @app.command()

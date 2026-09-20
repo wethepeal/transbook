@@ -105,6 +105,106 @@ def segments_to_paragraphs(segments: list[tuple[str, float]], h: float, *,
     return [clean_paragraph(p) for p in paras]
 
 
+# ── 页眉 / 页脚（M2）──────────────────────────────────────────────
+#: 纯页码：阿拉伯数字（含全角）或罗马数字，1~4 位
+_PAGE_NUM = re.compile(r"^[0-9０-９]{1,4}$|^[ivxlcIVXLC]{1,6}$")
+#: 页码 y 位置聚类的容差（PDF 单位）；同一页脚在各页上一般误差 < 2
+PAGE_NUM_TOL = 8.0
+
+
+def is_page_number(text: str) -> bool:
+    """该文本是否像一个孤立的页码。"""
+    return bool(_PAGE_NUM.match((text or "").strip()))
+
+
+def find_margin_segments(rows: list[tuple[str, float, float, float]], *, vertical: bool,
+                         band: float = 0.06, gap_ratio: float = 1.6,
+                         max_len: int = 30) -> set[int]:
+    """找出本页**版心之外、且与版心明显分离**的短文本（书眉候选）。
+
+    `rows` 为 `(段文本, 沿阅读轴偏移, y, x)`。**推进轴**指行/列递进的方向：
+    横排是 y（一行一行往下），竖排是 x（一列一列往左）——书眉一定坐在推进轴两端
+    之外，所以判据建立在推进轴上。
+
+    两条判据同时满足才算候选：
+    1. 推进轴坐标落在页面文字范围的**外侧 band**（默认 6%）；
+    2. 该坐标在整页里**独一无二且离群**：与其它任一段的推进轴距离都
+       ≥ `gap_ratio` × 中位行/列间距。
+
+    第 2 条里的"独一无二"是关键。仅用"贴边 + 跨页重复"会把竖排书里每列列首的
+    `「──── 」` 整批误删——它在 53 页（14.2%）出现、位置离散度为 0、且正处页面最右，
+    但它**与同列的其它段共享同一个 x**（距离 0），所以一定不是书眉。
+
+    **页码不走这里**：竖排书页码的 x 在不同页上从 96 跳到 499（不在版心外的固定位置），
+    靠边缘判据只能命中 14/373 页；改用 `find_page_number_rows` 按 y 跨页聚类。
+    """
+    live = [(i, text, (x if vertical else y))
+            for i, (text, _off, y, x) in enumerate(rows) if text.strip()]
+    if len(live) < 3:
+        return set()
+    cs = sorted(c for _, _, c in live)
+    lo, hi = cs[0], cs[-1]
+    span = hi - lo
+    if span <= 0:
+        return set()
+    # 中位间距用**去重后**的坐标算：同列/同行的重复坐标会产生 0 间距，
+    # 会把中位数拉到 0，使判据 2 失效。
+    uniq = sorted(set(cs))
+    ugaps = [b - a for a, b in zip(uniq, uniq[1:]) if b - a > 0.01]
+    if not ugaps:
+        return set()
+    med = statistics.median(ugaps)
+
+    out: set[int] = set()
+    for i, text, c in live:
+        if len(text) > max_len or is_page_number(text):
+            continue
+        pos = (c - lo) / span
+        if band < pos < 1.0 - band:
+            continue
+        if min(abs(c - oc) for j, _, oc in live if j != i) < med * gap_ratio:
+            continue
+        out.add(i)
+    return out
+
+
+def find_page_number_rows(rows_by_page: list[tuple[list[tuple[str, float, float, float]],
+                                                    float]],
+                          *, tol: float = 8.0, min_pages: int = 3,
+                          min_ratio: float = 0.02) -> set[int]:
+    """按 **y 位置跨页聚类**，找出整本书里"页码所在的那一条水平位置"。
+
+    页码每页数字都不同（1,2,3…），**无法按文本比对**；但它的位置是固定的。
+    实测：真实竖排书 45 页的页码全部落在 `y≈632`（而 x 从 96 跳到 499，
+    所以用"贴版心边缘"判据只能命中 14 页）；英文样书页码全部落在 `y≈42`。
+
+    返回命中的 y 桶编号集合；桶编号 = `round(y / tol)`。
+    """
+    need = max(min_pages, int(len(rows_by_page) * min_ratio))
+    buckets: dict[int, set[int]] = {}
+    for pi, (rows, _h) in enumerate(rows_by_page):
+        for text, _off, y, _x in rows:
+            if is_page_number(text):
+                buckets.setdefault(round(y / tol), set()).add(pi)
+    return {b for b, pgs in buckets.items() if len(pgs) >= need}
+
+
+def confirm_running_heads(candidates: list[list[str]], pages: int, *,
+                          min_ratio: float = 0.05, min_pages: int = 3) -> set[str]:
+    """跨页确认：哪些**书眉文本**（非数字）真的反复出现在版心之外。
+
+    单页贴边的短文本可能只是图注或偶然孤立的正文，所以要求它跨页复现。
+    页码不在此处处理——见 `find_page_number_rows`。
+    """
+    need = max(min_pages, int(pages * min_ratio))
+    seen: dict[str, set[int]] = {}
+    for pi, texts in enumerate(candidates):
+        for t in texts:
+            if not is_page_number(t):
+                seen.setdefault(t, set()).add(pi)
+    return {t for t, ps in seen.items() if len(ps) >= need}
+
+
 # ── 抽取器 ─────────────────────────────────────────────────────────
 @dataclass
 class PdfStats:
@@ -116,16 +216,18 @@ class PdfStats:
     vertical: bool = False
     ruby_runs: int = 0
     bookmarks: int = 0
+    headers_dropped: int = 0
 
 
 class PdfIngestor:
     """把 PDF 解析成 DocumentIR。结构与 EPUB 路径共用同一套 Block/TocEntry。"""
 
     def __init__(self, path: str | Path, doc_id: str | None = None,
-                 min_chars_per_para: int = 1) -> None:
+                 min_chars_per_para: int = 1, filter_headers: bool = True) -> None:
         self.path = Path(path)
         self.doc_id = doc_id
         self.min_chars = min_chars_per_para
+        self.filter_headers = filter_headers
         self._seq = 0
         self.stats = PdfStats()
 
@@ -170,7 +272,12 @@ class PdfIngestor:
 
     def _page_segments(self, raw: str, boxes: list[tuple[float, float, float, float]],
                        h: float, *, vertical: bool) -> list[tuple[str, float]]:
-        """切出「列段/行段」，并给出首字相对**版心参考边**的偏移量。
+        """`_page_rows` 的简化视图：只要 (段文本, 沿阅读轴的偏移)。"""
+        return [(t, off) for t, off, _y, _x in self._page_rows(raw, boxes, h, vertical=vertical)]
+
+    def _page_rows(self, raw: str, boxes: list[tuple[float, float, float, float]],
+                   h: float, *, vertical: bool) -> list[tuple[str, float, float, float]]:
+        """切出「列段/行段」，返回 `(段文本, 沿阅读轴的偏移, y, x)`。
 
         参考边的选择就是段落判定的核心，两个方向完全不同：
 
@@ -181,6 +288,9 @@ class PdfIngestor:
           缩进 ≈1 字即新段落，齐头行则是上一行的续接。另有一条兜底：若行间空隙
           明显大于常规行距（**空行分段**，LaTeX / 网页导出的 PDF 常见），
           把该行按 1 字缩进处理。
+
+        后两个分量（y、x）供**页眉/页脚过滤**使用，不参与段落判定：书眉看推进轴
+        （横排 y / 竖排 x），页码看 y（实测跨页恒定）。
         """
         if vertical:
             refs = [b[3] for b, c in zip(boxes, raw) if c.strip()]
@@ -212,14 +322,14 @@ class PdfIngestor:
                     gaps.append(pa[1] - pb[3])
         med_gap = statistics.median(gaps) if gaps else 0.0
 
-        segments: list[tuple[str, float]] = []
+        rows: list[tuple[str, float, float]] = []
         for i, (part, box) in enumerate(raw_segs):
             off = off_of(box) if box else 0.0
             if not vertical and i > 0 and med_gap > 0 and i - 1 < len(gaps):
                 if gaps[i - 1] > med_gap * 1.6 + h * 0.4:
                     off = max(off, h)  # 空行 → 按字下げ处理，即新段落
-            segments.append((part, off))
-        return segments
+            rows.append((part, off, (box[1] if box else 0.0), (box[0] if box else 0.0)))
+        return rows
 
     # ── 图片提取 ────────────────────────────────────────────────
     def _page_images(self, page, assets_dir: Path, pi: int) -> list[str]:
@@ -296,7 +406,7 @@ class PdfIngestor:
 
             # 预判竖排：换行拼接规则依赖排版方向（竖排列边界直接相连；横排要处理跨行断词
             # 与补空格），**必须先于正文定下来**。前置页常是纯图（表紙），故向后探测到
-            # 攒够 200 个位移样本为止，最多 20 页；这几页结果缓存，主循环不重复算。
+            # 攒够 200 个位移样本为止，最多 20 页；这几页结果缓存，不重复算。
             probe: list[tuple[float, float]] = []
             cache: dict[int, tuple[str, list[tuple[float, float, float, float]], float]] = {}
             for pi in range(min(20, pages)):
@@ -306,15 +416,47 @@ class PdfIngestor:
                 if len(probe) >= 200:
                     break
             vertical = detect_vertical(probe)
+
+            # 第一遍：把全篇切完并留下行段。
+            # 页眉/页脚是**跨页**判据（同一文本反复出现在版心之外），单页看不出，
+            # 所以必须先把所有页物化，再统一决定删哪些。
+            # 注意 `h`（字符高度）**必须逐页保存**：`segment_kind` 的阈值是 0.30h/1.80h，
+            # 用错页的 h 会让段落判定整体偏移、把段落大量并掉（实测踩过：3317 → 1409）。
+            rows_by_page: list[tuple[list[tuple[str, float, float, float]], float]] = []
+            for pi in range(pages):
+                if pi in cache:
+                    raw, boxes, h = cache[pi]
+                else:
+                    raw, boxes, h, _samples = self._page_chars(doc[pi])
+                rows_by_page.append(
+                    (self._page_rows(raw, boxes, h, vertical=vertical), h))
+
+            candidates = [find_margin_segments(rows, vertical=vertical)
+                          for rows, _h in rows_by_page]
+            drop_texts = confirm_running_heads(
+                [[rows[i][0] for i in sorted(idx)]
+                 for idx, (rows, _h) in zip(candidates, rows_by_page)],
+                pages)
+            num_rows = find_page_number_rows(rows_by_page, tol=PAGE_NUM_TOL)
+            if self.filter_headers and (drop_texts or num_rows):
+                for pi, (rows, h) in enumerate(rows_by_page):
+                    kept: list[tuple[str, float, float, float]] = []
+                    for i, row in enumerate(rows):
+                        text, _off, y, _x = row
+                        hit = ((is_page_number(text) and round(y / PAGE_NUM_TOL) in num_rows)
+                               or (i in candidates[pi] and text in drop_texts))
+                        if hit:
+                            self.stats.headers_dropped += 1
+                            continue
+                        kept.append(row)
+                    rows_by_page[pi] = (kept, h)
+
             cur_matter = "main"
 
             for pi in range(pages):
                 page = doc[pi]
-                if pi in cache:
-                    raw, boxes, h = cache[pi]
-                else:
-                    raw, boxes, h, _samples = self._page_chars(page)
-                segments = self._page_segments(raw, boxes, h, vertical=vertical)
+                rows, h = rows_by_page[pi]
+                segments = [(t, off) for t, off, _y, _x in rows]
 
                 # 本页归类：书签标题优先；书首的**纯图页**（表紙/口絵）没有书签可依，
                 # 按位置判——这是印本 PDF 的稳定版式约定。
