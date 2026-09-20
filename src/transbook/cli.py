@@ -808,8 +808,14 @@ def serve(
     root = root if root.is_absolute() else (Path.cwd() / root)
     root.mkdir(parents=True, exist_ok=True)
     app = create_app(root)
-    console.print(f"[green]transbook 服务[/green] http://{host}:{port}"
-                  f" ｜ 项目根 {root} ｜ 文档 /docs")
+    web = getattr(app.state, "web_dir", None)
+    console.print(f"[green]transbook 服务[/green] http://{host}:{port}")
+    if web:
+        console.print(f"  界面    http://{host}:{port}/ ｜ 项目根 {root}")
+    else:
+        console.print("  [yellow]界面未构建[/yellow]：在 web/ 下跑 "
+                      "`npm install && npm run build`，或用 `npm run dev` 起开发服务器")
+    console.print(f"  接口文档 http://{host}:{port}/docs")
     console.print("  [dim]作业在独立子进程里跑，服务重启不影响已提交的作业[/dim]")
     uvicorn.run(app, host=host, port=port, log_level=log_level)
 

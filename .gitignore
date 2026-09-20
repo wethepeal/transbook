@@ -20,3 +20,11 @@ configs/local.yaml
 # ── 产物 ────────────────────────────────────────────────
 out/
 *.epub.tmp
+
+# ── 前端（M6）───────────────────────────────────────────
+# node_modules 与构建产物都不入库：`npm install && npm run build` 可完全再生，
+# 而 dist 里带内容哈希的文件名会让每次构建都产生一堆无意义 diff。
+web/node_modules/
+web/dist/
+web/.vite/
+web/.env.local

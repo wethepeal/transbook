@@ -45,14 +45,24 @@ class ReviewRequest(BaseModel):
     tsv: str
 
 
+class SegmentPatch(BaseModel):
+    """单段保存（校对界面逐段编辑用）。"""
+
+    final_translation: str | None = None
+    #: 传 true 可把该段的定稿清空，回到机翻
+    clear: bool = False
+
+
 def create_app(root: str | Path = P.DEFAULT_ROOT,
-               db_path: str | Path | None = None) -> FastAPI:
-    """构造应用。`root` 下每个子目录是一个项目。"""
+               db_path: str | Path | None = None,
+               web: str | Path | None = None) -> FastAPI:
+    """构造应用。`root` 下每个子目录是一个项目；`web` 指向前端构建产物目录。"""
     from contextlib import asynccontextmanager
 
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     service_db = Path(db_path) if db_path else root / "service.db"
+    web_dir = Path(web) if web else find_web_dist()
 
     def conn():
         return connect(service_db)
@@ -152,8 +162,11 @@ def create_app(root: str | Path = P.DEFAULT_ROOT,
             where.append("status=?")
             args.append(status)
         if q:
-            where.append("(source_text LIKE ? OR IFNULL(translation,'') LIKE ?)")
-            args += [f"%{q}%", f"%{q}%"]
+            # **三列都要搜**：漏掉 final_translation 的话，人在界面里改完就再也搜不到
+            # 自己写的那句（实测踩过）
+            where.append("(source_text LIKE ? OR IFNULL(translation,'') LIKE ? "
+                         "OR IFNULL(final_translation,'') LIKE ?)")
+            args += [f"%{q}%"] * 3
         if where:
             sql += " WHERE " + " AND ".join(where)
         c = connect(proj.db_path)
@@ -166,6 +179,37 @@ def create_app(root: str | Path = P.DEFAULT_ROOT,
             c.close()
         return {"total": total, "offset": offset, "limit": limit,
                 "items": [dict(r) for r in rows]}
+
+    @app.patch("/api/books/{doc_id}/segments/{seg_id}")
+    def patch_segment(doc_id: str, seg_id: str, body: SegmentPatch) -> dict[str, Any]:
+        """保存**单段**定稿——校对界面逐段编辑用。
+
+        与 `/review`（整份 TSV 回灌）互补：TSV 适合离线批量改，
+        这个接口适合界面里改一段存一段（不必为了改一个字重传 3400 行）。
+        """
+        proj = project_or_404(doc_id)
+        if not proj.db_path.is_file():
+            raise HTTPException(409, "尚未入库")
+        c = connect(proj.db_path)
+        try:
+            row = c.execute("SELECT seg_id, translation FROM segment WHERE seg_id=?",
+                            (seg_id,)).fetchone()
+            if row is None:
+                raise HTTPException(404, f"段落不存在：{seg_id}")
+            if body.clear:
+                c.execute("UPDATE segment SET final_translation=NULL, updated_at=? "
+                          "WHERE seg_id=?", (store._now(), seg_id))
+            else:
+                if body.final_translation is None:
+                    raise HTTPException(400, "需要 final_translation 或 clear=true")
+                c.execute("UPDATE segment SET final_translation=?, updated_at=? "
+                          "WHERE seg_id=?",
+                          (body.final_translation, store._now(), seg_id))
+            c.commit()
+        finally:
+            c.close()
+        return {"seg_id": seg_id, "final_translation": None if body.clear
+                else body.final_translation}
 
     @app.get("/api/books/{doc_id}/qa")
     def qa(doc_id: str) -> dict[str, Any]:
@@ -184,6 +228,26 @@ def create_app(root: str | Path = P.DEFAULT_ROOT,
                 "issues": [{"kind": i.kind, "seg_id": i.seg_id, "detail": i.detail,
                             "severity": i.severity}
                            for i in rep.issues[:500]]}
+
+    @app.api_route("/api/books/{doc_id}/files/{name}", methods=["GET", "HEAD"])
+    def download_output(doc_id: str, name: str):
+        """下载产物（EPUB/PDF）。
+
+        只允许项目目录下的**直接文件**：挡掉 `../` 与子目录，避免目录穿越。
+        每个项目一个目录，所以这个限制不影响正常使用。
+
+        同时接受 HEAD：只用 GET 时 HEAD 会返回 405，而链接检查器、部分下载工具
+        与断点续传客户端都会先发 HEAD。
+        """
+        from fastapi.responses import FileResponse
+
+        proj = project_or_404(doc_id)
+        if not name or name.startswith(".") or "/" in name or "\\" in name:
+            raise HTTPException(400, f"非法文件名：{name}")
+        f = (proj.dir / name).resolve()
+        if f.parent != proj.dir.resolve() or not f.is_file():
+            raise HTTPException(404, f"文件不存在：{name}")
+        return FileResponse(f, filename=name)
 
     @app.get("/api/books/{doc_id}/review.tsv", response_class=PlainTextResponse)
     def export_review(doc_id: str, only_translated: bool = False) -> str:
@@ -302,7 +366,55 @@ def create_app(root: str | Path = P.DEFAULT_ROOT,
                                  headers={"Cache-Control": "no-cache",
                                           "X-Accel-Buffering": "no"})
 
+    # ── 前端（M6）────────────────────────────────────────────────────
+    # 注册在**所有 /api 路由之后**：FastAPI 按注册顺序匹配，
+    # 兜底路由放前面会把接口全吃掉。
+    if web_dir and (web_dir / "index.html").is_file():
+        from fastapi.responses import FileResponse
+        from fastapi.staticfiles import StaticFiles
+
+        assets = web_dir / "assets"
+        if assets.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+        @app.get("/", include_in_schema=False)
+        def index() -> Any:
+            return FileResponse(web_dir / "index.html")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def spa(full_path: str) -> Any:
+            # 未命中的 /api 请求必须还是 404，不能回退成 index.html——
+            # 否则前端把 HTML 当 JSON 解析，报出莫名其妙的错
+            if full_path.startswith("api/"):
+                raise HTTPException(404, "接口不存在")
+            candidate = (web_dir / full_path).resolve()
+            if full_path and candidate.is_file() and web_dir.resolve() in candidate.parents:
+                return FileResponse(candidate)
+            return FileResponse(web_dir / "index.html")
+
+        app.state.web_dir = web_dir
+    else:
+        app.state.web_dir = None
+
+        @app.get("/", include_in_schema=False)
+        def no_ui() -> Any:
+            return {"detail": "前端未构建：在 web/ 下执行 npm install && npm run build，"
+                              "或用 `npm run dev` 起开发服务器"}
+
     return app
+
+
+def find_web_dist(start: str | Path | None = None) -> Path | None:
+    """定位前端构建产物 `web/dist`。
+
+    从当前目录向上找，兼容"在项目根跑"与"在别处跑"两种情况。
+    """
+    here = Path(start) if start else Path(__file__).resolve()
+    for base in [Path.cwd(), *Path(here).parents]:
+        cand = base / "web" / "dist"
+        if (cand / "index.html").is_file():
+            return cand
+    return None
 
 
 # ── 小工具 ──────────────────────────────────────────────────────────
