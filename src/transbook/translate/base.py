@@ -49,7 +49,7 @@ class Usage:
 
 @dataclass
 class BookContext:
-    """全书上下文：术语与文体在每一批提示词里复用（也利于缓存命中）。"""
+    """全书上下文：术语、滚动摘要与文体在每一批提示词里复用（也利于缓存命中）。"""
 
     doc_id: str = ""
     title: str = ""
@@ -59,6 +59,9 @@ class BookContext:
     style_hint: str = "忠实、自然、书面语；人名与专有名词全书统一"
     glossary: dict[str, str] = field(default_factory=dict)
     do_not_translate: list[str] = field(default_factory=list)
+    #: 已译章节的**滚动摘要**（M3）。长篇小说的人称/称谓/伏笔一致性靠它维持：
+    #: 每译完一章就追加一段梗概，随后的批次都能看到前情。
+    rolling_summary: str = ""
 
     def glossary_block(self) -> str:
         if not self.glossary:
@@ -74,8 +77,12 @@ class TranslationProvider(ABC):
     model: str = ""
 
     @abstractmethod
-    def translate(self, items: list[SegmentIn], ctx: BookContext) -> tuple[list[SegmentOut], Usage]:
-        """翻译一批段落。返回 (结果列表, 用量)。结果必须覆盖全部输入 seg_id。"""
+    def translate(self, items: list[SegmentIn], ctx: BookContext, *,
+                  strict: bool = False) -> tuple[list[SegmentOut], Usage]:
+        """翻译一批段落。返回 (结果列表, 用量)。结果必须覆盖全部输入 seg_id。
+
+        `strict=True` 用于**未译重试**：提示词会追加"禁止原样返回原文"的强指令。
+        """
 
     def estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
         """按本引擎单价估算费用（元）。默认 0（本地模型 / 假引擎）。"""

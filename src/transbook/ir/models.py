@@ -129,3 +129,21 @@ class DocumentIR(BaseModel):
         if not skip:
             return []
         return [b for b in self.translatable() if b.matter in skip]
+
+    def cover_image(self) -> str | None:
+        """挑出封面图（EPUB 打包用），返回文件名；找不到返回 None。
+
+        优先用 **前后附页归类**（M2 的 `matter`），再退回文件名启发式
+        （`cover` / `hyoshi` / `表紙`）——这样没有 `matter` 信息的老 IR 也能用。
+        """
+        import posixpath
+
+        imgs = [b for b in self.blocks if b.type == "image" and b.path]
+        for b in imgs:
+            if b.matter == "cover":
+                return posixpath.basename(b.path or "")
+        for b in imgs:
+            name = posixpath.basename(b.path or "").lower()
+            if "cover" in name or "hyoshi" in name or "表紙" in name:
+                return posixpath.basename(b.path or "")
+        return None

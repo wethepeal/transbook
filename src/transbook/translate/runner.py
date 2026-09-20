@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from transbook.store import db as store
+from transbook.textutil import is_untranslated
 from transbook.translate.base import (
     BookContext,
     SegmentIn,
@@ -25,6 +26,10 @@ from transbook.translate.base import (
 )
 from transbook.translate.prompts import PROMPT_VERSION
 
+#: 未译护栏的生效下限：原文短于此长度就放过。
+#: `「べ」` 这类拟声片段原样保留无可厚非，拿它去重试纯属浪费 token。
+GUARD_MIN_CHARS = 20
+
 
 @dataclass
 class RunReport:
@@ -33,6 +38,10 @@ class RunReport:
     translated: int = 0
     failed: int = 0
     retried: int = 0
+    #: 被护栏判定为"原样返回原文"并触发强指令重试的段落数（M3）
+    guarded: int = 0
+    #: 重试后仍然是原文的段落数——已保留译文并交由 `tp qa` 复核
+    still_untranslated: int = 0
     usage: Usage = field(default_factory=Usage)
     stopped: str = ""
     est_tokens_in: int = 0
@@ -44,9 +53,14 @@ class RunReport:
             return (f"[干跑] 批次 {self.batches} ｜ 预估输入 {self.est_tokens_in:,} token ｜ "
                     f"输出 {self.est_tokens_out:,} token ｜ 预估费用 ¥{self.est_cost:.4f}"
                     f"{'（' + self.stopped + '）' if self.stopped else ''}")
+        extra = ""
+        if self.guarded:
+            extra = f" ｜ 未译护栏 {self.guarded}"
+            if self.still_untranslated:
+                extra += f"（仍原样 {self.still_untranslated}）"
         return (f"批次 {self.batches} ｜ 已译 {self.translated} ｜ 失败 {self.failed} ｜ "
                 f"重试补齐 {self.retried} ｜ token 入 {self.usage.tokens_in:,} / 出 {self.usage.tokens_out:,} ｜ "
-                f"花费 ¥{self.usage.cost:.4f}"
+                f"花费 ¥{self.usage.cost:.4f}{extra}"
                 f"{' ｜ 停止原因: ' + self.stopped if self.stopped else ''}")
 
 
@@ -62,6 +76,7 @@ def run(
     max_rounds: int = 3,
     dry_run: bool = False,
     progress: Callable[[str], None] | None = None,
+    guard_min_chars: int = GUARD_MIN_CHARS,
 ) -> RunReport:
     """执行（或干跑）翻译。"""
     rows = store.pending(conn, limit)
@@ -86,7 +101,8 @@ def run(
         if progress:
             progress(f"批次 {bi}/{len(batches)}（{len(batch)} 段）")
 
-        outs, usage = _translate_batch_with_repair(provider, ctx, batch, max_rounds, rep)
+        outs, usage = _translate_batch_with_repair(provider, ctx, batch, max_rounds, rep,
+                                                   guard_min_chars=guard_min_chars)
         rep.usage.add(usage)
 
         for out in outs:
@@ -115,17 +131,25 @@ def _translate_batch_with_repair(
     batch: list[SegmentIn],
     max_rounds: int,
     rep: RunReport,
+    *,
+    guard_min_chars: int = GUARD_MIN_CHARS,
 ) -> tuple[list, Usage]:
-    """翻译一批；对缺号/失败的段落收拢重试。"""
+    """翻译一批；对缺号/失败/原样返回原文的段落收拢重试。
+
+    **未译护栏**（M3）：模型偶发把长段原文原样返回。这类问题不会报错、状态还是
+    `done`，只有 QA 事后能看出来，所以我们在这里就地重试——而且**必须换成强指令**，
+    原样重发同样的请求大概率得到同样的结果（`strict=True`）。
+    """
     total = Usage()
     pending_items = list(batch)
     results: dict[str, object] = {}
+    strict = False
 
     for attempt in range(max_rounds):
         if not pending_items:
             break
         try:
-            outs, usage = provider.translate(pending_items, ctx)
+            outs, usage = provider.translate(pending_items, ctx, strict=strict)
         except Exception as exc:  # noqa: BLE001 - 网络/解析错误统一降级为该批失败
             for it in pending_items:
                 results[it.seg_id] = _err(it.seg_id, f"{type(exc).__name__}: {exc}")
@@ -133,17 +157,37 @@ def _translate_batch_with_repair(
         total.add(usage)
         if attempt:
             rep.retried += sum(1 for o in outs if not o.error)
+
+        src_of = {i.seg_id: i.text for i in pending_items}
         retry: list[SegmentIn] = []
+        untranslated_retry = 0
         for out in outs:
             if out.error:
                 retry.append(next(i for i in pending_items if i.seg_id == out.seg_id))
                 results[out.seg_id] = out
+                continue
+            if is_untranslated(src_of[out.seg_id], out.translation,
+                               min_chars=guard_min_chars):
+                retry.append(next(i for i in pending_items if i.seg_id == out.seg_id))
+                # 先留着这份译文：万一重试也没修好，至少不会把段落弄成"空"
+                results[out.seg_id] = out
+                untranslated_retry += 1
             else:
                 results[out.seg_id] = out
+        if untranslated_retry:
+            rep.guarded += untranslated_retry
+            strict = True
         pending_items = retry
-    else:
-        for it in pending_items:
+        if not pending_items:
+            break
+
+    for it in pending_items:
+        out = results.get(it.seg_id)
+        if out is None:
             results[it.seg_id] = _err(it.seg_id, "重试后仍未返回")
+        elif getattr(out, "error", None) is None:
+            # 重试后仍是原文 → 保留译文，但记账让报告与 QA 能看见
+            rep.still_untranslated += 1
 
     ordered = [results[i.seg_id] for i in batch if i.seg_id in results]
     return ordered, total

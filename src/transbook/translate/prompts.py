@@ -8,7 +8,16 @@ from __future__ import annotations
 
 from transbook.translate.base import BookContext, SegmentIn
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
+
+#: 护栏重试时追加到用户消息里的强指令。
+#: 实测模型偶发把长段原文原样返回（1/3216），此时**必须换更强的提示词**再试，
+#: 原样重发同样的请求大概率得到同样的结果。
+STRICT_SUFFIX = """
+【重要】上一轮你把这些段落**原样返回了日文原文**，这是错误的。
+必须逐段给出中文译文；即使是拟声词、专有名词或短句，也要译成中文
+（拟声词可译为对应的中文拟声表达）。**禁止**在 `text` 字段里出现日文假名。
+"""
 
 SYSTEM = """你是一名专业的{source_lang}→{target_lang}文学翻译。要求：
 1. 忠实原意，译文自然流畅，符合{target_lang}书面语习惯；不要逐字硬译。
@@ -37,8 +46,9 @@ USER = """请把下面 {n} 个段落翻译成{target_lang}。
 """
 
 
-def build_messages(items: list[SegmentIn], ctx: BookContext) -> list[dict[str, str]]:
-    """构造 OpenAI 兼容的 messages。"""
+def build_messages(items: list[SegmentIn], ctx: BookContext, *,
+                   strict: bool = False) -> list[dict[str, str]]:
+    """构造 OpenAI 兼容的 messages。`strict=True` 时追加"禁止原样返回原文"的强指令。"""
     import json
 
     payload = json.dumps([{"id": i.seg_id, "text": i.text} for i in items],
@@ -49,5 +59,9 @@ def build_messages(items: list[SegmentIn], ctx: BookContext) -> list[dict[str, s
         author=ctx.author or "（未知）", style_hint=ctx.style_hint,
         glossary=ctx.glossary_block(), dnt=dnt,
     )
+    if ctx.rolling_summary:
+        system = f"{system}\n前文梗概（保持衔接与称谓一致）：\n{ctx.rolling_summary}\n"
     user = USER.format(n=len(items), target_lang=ctx.target_lang, payload=payload)
+    if strict:
+        user = f"{user}{STRICT_SUFFIX}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

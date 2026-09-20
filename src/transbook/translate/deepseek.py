@@ -118,10 +118,11 @@ class DeepSeekProvider(TranslationProvider):
         content = data["choices"][0]["message"]["content"]
         return content, data.get("usage", {}) or {}
 
-    def translate(self, items: list[SegmentIn], ctx: BookContext) -> tuple[list[SegmentOut], Usage]:
+    def translate(self, items: list[SegmentIn], ctx: BookContext, *,
+                  strict: bool = False) -> tuple[list[SegmentOut], Usage]:
         if not items:
             return [], Usage()
-        messages = build_messages(items, ctx)
+        messages = build_messages(items, ctx, strict=strict)
         send = self._transport or self._http
         content, raw_usage = send(messages, self.model)
 

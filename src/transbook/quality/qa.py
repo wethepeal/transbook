@@ -21,6 +21,7 @@ import sqlite3
 from dataclasses import dataclass, field
 
 from transbook.ir import DocumentIR
+from transbook.textutil import is_untranslated
 
 HIRAGANA = re.compile(r"[\u3041-\u309f]")
 KATAKANA = re.compile(r"[\u30a1-\u30f6]")
@@ -117,8 +118,10 @@ def check(conn: sqlite3.Connection, ir: DocumentIR | None = None,
         # ③ 原文泄漏（等于没翻）。
         #    只对**含假名**的原文报警：纯汉字/符号串（「第七章 『Reweave』」「「────」」）
         #    译成同样内容是正确的，早期版本会误报 115 条（真实数据驱动修正）。
+        #    与翻译时的**未译护栏**共用同一个判定（`textutil.is_untranslated`），
+        #    避免"护栏认为没翻、QA 认为没问题"这种口径分裂。
         if _norm(tgt) == _norm(src):
-            if KANA.search(src):
+            if is_untranslated(src, tgt):
                 rep.add("source_leak", seg, f"译文与原文相同：{src[:30]!r}")
             continue
 

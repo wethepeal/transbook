@@ -393,12 +393,14 @@ def render(
         chapters = build_chapters(ir, translations, mode=mode)
         nav = build_nav(chapters)
         epub_path = dest / f"{ir.doc.id}.{mode}.epub"
+        cover = ir.cover_image()
         write_epub(epub_path, title=ir.doc.title, author=ir.doc.author, language="zh",
                    chapters=chapters, css=CSS, nav=nav,
-                   images_dir=work / "assets",
+                   images_dir=work / "assets", cover_image=cover,
                    identifier=f"urn:transbook:{ir.doc.id}:{mode}")
+        tip = f" ｜ 封面 {cover}" if cover else " ｜ [yellow]未找到封面图[/yellow]"
         console.print(f"[green]✓[/green] EPUB({mode})：{epub_path} "
-                      f"｜ {len(chapters)} 章 ｜ {epub_path.stat().st_size / 1024 / 1024:.2f} MB")
+                      f"｜ {len(chapters)} 章 ｜ {epub_path.stat().st_size / 1024 / 1024:.2f} MB{tip}")
 
     if "pdf" in wants:
         res = render_pdf(work, ir, translations, mode=mode)
@@ -577,6 +579,44 @@ def qa(
         if examples and n > examples:
             console.print(f"  … [{kind}] 另有 {n - examples} 条未显示")
     if strict and not rep.ok():
+        raise typer.Exit(1)
+
+
+@app.command()
+def validate(
+    target: Path = typer.Argument(..., help="EPUB 文件，或含 *.epub 的工作目录"),
+    examples: int = typer.Option(12, "--examples", help="最多展示几条问题"),
+    strict: bool = typer.Option(False, "--strict", help="有错误时以非零码退出（可进 CI）"),
+) -> None:
+    """⑨ EPUB 校验：内置结构检查 + epubcheck（若已安装）。"""
+    from transbook.validate import find_epubcheck, validate_epub
+
+    if target.is_dir():
+        epubs = sorted(target.glob("*.epub"))
+        if not epubs:
+            console.print(f"[red]目录里没有 .epub：{target}[/red]")
+            raise typer.Exit(1)
+    elif target.is_file():
+        epubs = [target]
+    else:
+        console.print(f"[red]找不到目标：{target}[/red]")
+        raise typer.Exit(1)
+
+    jar = find_epubcheck()
+    console.print(f"[dim]epubcheck：{jar if jar else '未安装（仅跑内置检查）'}[/dim]")
+    bad = 0
+    for epub in epubs:
+        rep = validate_epub(epub)
+        console.print(f"\n[bold]✓ {epub.name}[/bold]" if not rep.errors
+                      else f"\n[bold red]✗ {epub.name}[/bold red]")
+        console.print(f"  {rep.summary()}")
+        for issue in rep.issues[:examples]:
+            colour = "red" if issue.level == "error" else "yellow"
+            console.print(f"  [{colour}]{issue}[/{colour}]")
+        if len(rep.issues) > examples:
+            console.print(f"  … 另有 {len(rep.issues) - examples} 条未显示")
+        bad += 1 if rep.errors else 0
+    if bad and strict:
         raise typer.Exit(1)
 
 

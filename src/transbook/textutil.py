@@ -157,6 +157,26 @@ def squeeze_cjk_spaces(s: str) -> str:
     return _CJK_SPACE.sub("", s)
 
 
+#: 平假名 + 片假名。用作"这段原文是不是真日文"的判据
+KANA_ANY = re.compile(r"[\u3041-\u309f\u30a1-\u30f6]")
+
+
+def is_untranslated(src: str, tgt: str, *, min_chars: int = 0) -> bool:
+    """译文是否**等于原文**（即根本没翻）。
+
+    只对**含假名**的原文成立：纯汉字/符号串（`第七章 『Reweave』`、`「────」`）
+    译成同样内容是**正确**的——早期版本在这里误报过 115 条（真实数据驱动修正）。
+    `min_chars` 进一步排除 `「べ」` 这类拟声片段：它们原样保留无可厚非，
+    但拿它们去重试纯属浪费。
+
+    比较时**剔除全部空白**（与 `tp qa` 同一口径）：模型把原文的换行/空格重排一遍
+    也仍然是"没翻"，这不该逃过护栏。
+    """
+    s = _WS.sub("", src or "")
+    return (bool(s) and s == _WS.sub("", tgt or "")
+            and len(s) >= min_chars and bool(KANA_ANY.search(s)))
+
+
 # ── 前后附页归类（M2）───────────────────────────────────────────────
 #: 类别 → 判定正则。**顺序即优先级**：`allcover` 必须先于 `cover` 判，否则会被误当封面。
 MATTER_PATTERNS: tuple[tuple[str, str], ...] = (

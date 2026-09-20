@@ -20,6 +20,8 @@ from transbook.ir import Block, DocumentIR
 
 XHTML_NS = "http://www.w3.org/1999/xhtml"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
+#: EPUB3 的结构语义命名空间（`epub:type`）
+OPS_NS = "http://www.idpf.org/2007/ops"
 Mode = Literal["bilingual", "zh"]
 
 CSS = """\
@@ -44,6 +46,10 @@ table.tbl caption { font-size: .88em; color: #666; margin-bottom: .3em; }
 aside.footnote { font-size: .85em; color: #555; margin: .6em 0; padding-left: 1em;
        border-left: 2px solid #ddd; text-indent: 0; }
 sup a.noteref { text-decoration: none; font-size: .75em; vertical-align: super; }
+/* 封面页：整页居中、不留边距，避免阅读器把它排成正文页 */
+body[epub|type~="cover"] { margin: 0; padding: 0; text-align: center; }
+.cover { margin: 0; padding: 0; text-align: center; page-break-after: always; }
+.cover img { max-width: 100%; max-height: 100%; }
 """
 
 
@@ -77,22 +83,50 @@ def _append_text(parent: etree._Element, tag: str, text: str, **attrs: str) -> e
     return child
 
 
-def _html_doc(lang: str, title: str, body_children: list[etree._Element]) -> bytes:
+def _html_doc(lang: str, title: str, body_children: list[etree._Element],
+              *, body_type: str | None = None,
+              css_href: str = "../style.css") -> bytes:
+    """构造一个 XHTML 文档。
+
+    `css_href` 必须随文档位置而变：正文在 `OEBPS/text/` 下用 `../style.css`，
+    而 `nav.xhtml` 就在 `OEBPS/` 下、只能用 `style.css`——写错会指向包外，
+    校验器会报"引用了不存在的文件"（内置校验实测抓到过）。
+    """
     # 用默认命名空间（nsmap 的 None 键），否则会序列化成 <html:html> 前缀形式
-    root = etree.Element(f"{{{XHTML_NS}}}html", nsmap={None: XHTML_NS})
+    nsmap: dict[str | None, str] = {None: XHTML_NS}
+    if body_type:
+        # `epub:type` 需要声明 epub 前缀，否则 lxml 会生成 ns0 这样的一次性前缀
+        nsmap["epub"] = OPS_NS
+    root = etree.Element(f"{{{XHTML_NS}}}html", nsmap=nsmap)
     root.set(f"{{{XML_NS}}}lang", lang)
     root.set("lang", lang)
     head = _el("head")
     _append_text(head, "title", title)
-    link = _el("link", rel="stylesheet", type="text/css", href="../style.css")
+    link = _el("link", rel="stylesheet", type="text/css", href=css_href)
     head.append(link)
     body = _el("body")
+    if body_type:
+        body.set(f"{{{OPS_NS}}}type", body_type)
     for c in body_children:
         body.append(c)
     root.append(head)
     root.append(body)
     return etree.tostring(root, xml_declaration=True, encoding="utf-8",
                           doctype='<!DOCTYPE html>')
+
+
+def build_cover(title: str, image_href: str) -> bytes:
+    """EPUB3 封面页（M4）。
+
+    单独一个 XHTML 整页显示封面图——多数阅读器的书架缩略图取的就是这一页；
+    清单里那张图还要带 `properties="cover-image"`（在打包器 `_opf` 里加）。
+
+    不用 `<svg><image>` 那套写法：它要额外读图片尺寸，而收益只在极端宽高比时
+    才看得出来；`<img>` + CSS 已能覆盖主流阅读器。
+    """
+    div = _el("div", **{"class": "cover"})
+    div.append(_el("img", src=image_href, alt=title or "cover"))
+    return _html_doc("zh", title or "封面", [div], body_type="cover")
 
 
 def _with_noterefs(p: etree._Element, refs: list[str]) -> etree._Element:
@@ -222,4 +256,5 @@ def build_nav(chapters: list[Chapter]) -> bytes:
         li.append(a)
         ol.append(li)
     nav.append(ol)
-    return _html_doc("zh", "目录", [nav])
+    # nav.xhtml 就在 OEBPS/ 下，样式表是同级的 style.css（写成 ../ 会指到包外）
+    return _html_doc("zh", "目录", [nav], css_href="style.css")
