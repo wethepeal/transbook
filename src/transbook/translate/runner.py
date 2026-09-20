@@ -77,17 +77,53 @@ def run(
     dry_run: bool = False,
     progress: Callable[[str], None] | None = None,
     guard_min_chars: int = GUARD_MIN_CHARS,
+    ir=None,
+    rolling_summary: bool = False,
+    summary_window: int = 4,
 ) -> RunReport:
-    """执行（或干跑）翻译。"""
+    """执行（或干跑）翻译。
+
+    `ir` + `rolling_summary=True` 时，按**批次所属的章**注入"最近 `summary_window`
+    章的前情"（`tp summarize` 生成，存在 `chapter_summary` 表里），
+    用来压住长篇的人称/称谓/伏笔漂移。干跑会一并给出注入规模，便于先看价。
+    """
     rows = store.pending(conn, limit)
     items = [SegmentIn(r["seg_id"], r["source_text"], r["kind"]) for r in rows]
     batches = make_batches(items, max_chars=batch_chars, max_items=batch_items)
     rep = RunReport(dry_run=dry_run, batches=len(batches))
 
+    # 前情注入表：{章号: 累积梗概} + {block_id: 章号}
+    summaries: dict[int, str] = {}
+    chap_of: dict[str, int] = {}
+    if rolling_summary:
+        if ir is None:
+            raise ValueError("rolling_summary 需要同时传入 ir（用于定位每批所属的章）")
+        from transbook.translate.summary import chapter_of_block
+
+        summaries = store.summaries_with_titles(conn, ir.doc.id)
+        chap_of = chapter_of_block(ir)
+
+    def _prev_summary(seg_ids: list[str]) -> str:
+        """本批所属章的**前情**：最近 `summary_window` 章（严格早于本章）的摘要。"""
+        if not summaries or not seg_ids:
+            return ""
+        unit = seg_ids[0].split(":", 1)[1]
+        ci = chap_of.get(unit.split(":", 1)[0], 1)
+        keys = [k for k in sorted(summaries) if k < ci][-max(1, summary_window):]
+        if not keys:
+            return ""
+        parts = [f"第 {k} 章「{summaries[k][1]}」：{summaries[k][0]}" for k in keys]
+        return "前情提要：\n" + "\n".join(parts)
+
     if dry_run:
         rep.est_tokens_in = sum(estimate_tokens(i.text) for i in items)
         # 提示词与术语表开销按 1.4 倍估；输出按源文的 0.8 倍估（中文更紧凑）
         rep.est_tokens_in = int(rep.est_tokens_in * 1.4)
+        if summaries:
+            # 前情是**每批**都要重复注入的固定前缀，按批数计费
+            extra = sum(estimate_tokens(_prev_summary([i.seg_id for i in batch]))
+                        for batch in batches)
+            rep.est_tokens_in += extra
         rep.est_tokens_out = int(rep.est_tokens_in * 0.7)
         rep.est_cost = provider.estimate_cost(rep.est_tokens_in, rep.est_tokens_out)
         if max_cost and rep.est_cost > max_cost:
@@ -100,6 +136,8 @@ def run(
             break
         if progress:
             progress(f"批次 {bi}/{len(batches)}（{len(batch)} 段）")
+        if summaries:
+            ctx.rolling_summary = _prev_summary([i.seg_id for i in batch])
 
         outs, usage = _translate_batch_with_repair(provider, ctx, batch, max_rounds, rep,
                                                    guard_min_chars=guard_min_chars)

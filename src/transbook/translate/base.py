@@ -88,6 +88,14 @@ class TranslationProvider(ABC):
         """按本引擎单价估算费用（元）。默认 0（本地模型 / 假引擎）。"""
         return 0.0
 
+    def complete(self, messages: list[dict[str, str]]) -> tuple[str, Usage]:
+        """自由文本补全（滚动摘要等辅助任务）。
+
+        与 `translate()` 分开：那些任务要的是**自然语言段落**，不是 JSON 往返，
+        也没法套"每段一个 id"的契约。默认不支持，由具体引擎实现。
+        """
+        raise NotImplementedError(f"{self.name} 未实现 complete()")
+
 
 # ── 批处理 ──────────────────────────────────────────────────────────
 DEFAULT_BATCH_CHARS = 2400

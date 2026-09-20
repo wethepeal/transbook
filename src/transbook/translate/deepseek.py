@@ -98,25 +98,48 @@ class DeepSeekProvider(TranslationProvider):
         return (tokens_in / 1e6 * p["in_miss"] * rate) + (tokens_out / 1e6 * p["out"] * rate)
 
     # ── 传输 ────────────────────────────────────────────────────
-    def _http(self, messages: list[dict[str, str]], model: str) -> tuple[str, dict[str, Any]]:
+    def _http(self, messages: list[dict[str, str]], model: str, *,
+              expect_json: bool = True) -> tuple[str, dict[str, Any]]:
         import httpx
 
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": self.temperature,
+            **self.extra_body,
+        }
+        if expect_json:
+            body["response_format"] = {"type": "json_object"}
         resp = httpx.post(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": messages,
-                "temperature": self.temperature,
-                "response_format": {"type": "json_object"},
-                **self.extra_body,
-            },
+            json=body,
             timeout=self.timeout,
         )
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         return content, data.get("usage", {}) or {}
+
+    def complete(self, messages: list[dict[str, str]]) -> tuple[str, Usage]:
+        """自由文本补全（滚动摘要用）。
+
+        不复用 `translate()`：那条路要 JSON 往返（`response_format`），
+        摘要要的是自然语言段落，套 JSON 反而会让模型把梗概塞进字符串里。
+        """
+        send = self._transport
+        if send is not None:
+            # 测试注入的 transport 传不进去 expect_json，保持两参调用形态
+            content, raw_usage = send(messages, self.model)  # type: ignore[misc]
+        else:
+            content, raw_usage = self._http(messages, self.model, expect_json=False)
+        usage = Usage(tokens_in=int(raw_usage.get("prompt_tokens", 0) or 0),
+                      tokens_out=int(raw_usage.get("completion_tokens", 0) or 0), calls=1)
+        if not usage.tokens_in:  # transport 未给用量时按输入估算，护栏不能失效
+            est = sum(len(m.get("content", "")) for m in messages) // 2
+            usage.tokens_in, usage.tokens_out = est, max(1, est // 3)
+        usage.cost = self.estimate_cost(usage.tokens_in, usage.tokens_out)
+        return content, usage
 
     def translate(self, items: list[SegmentIn], ctx: BookContext, *,
                   strict: bool = False) -> tuple[list[SegmentOut], Usage]:

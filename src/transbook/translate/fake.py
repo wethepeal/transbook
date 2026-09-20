@@ -48,3 +48,14 @@ class FakeProvider(TranslationProvider):
             text = self.seed_translation or f"{self.prefix}{it.text}"
             out.append(SegmentOut(it.seg_id, translation=text))
         return out, Usage(calls=1)
+
+    def complete(self, messages: list[dict[str, str]]) -> tuple[str, Usage]:
+        """摘要等辅助任务的假实现：回显"第 N 章"以便测试断言章节归属。"""
+        user = next((m["content"] for m in messages if m["role"] == "user"), "")
+        import re
+
+        found = re.findall(r"第 (\d+) 章", user)
+        n = found[0] if found else "0"
+        self.calls.append([f"complete:{n}"])
+        self.strict_calls.append(False)
+        return f"[梗概截至第{n}章]" + (self.prefix or ""), Usage(calls=1)

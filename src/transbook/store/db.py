@@ -76,6 +76,22 @@ CREATE TABLE IF NOT EXISTS tm (
     updated_at   TEXT,
     PRIMARY KEY (text_hash, source_lang, target_lang)
 );
+
+-- 滚动摘要（M3）：`summary` 是**截至本章**的累积梗概，翻译下一章时注入，
+-- 用来维持长篇的人称/称谓/伏笔一致（计划书 §6.4）。
+CREATE TABLE IF NOT EXISTS chapter_summary (
+    doc_id        TEXT NOT NULL,
+    chapter_index INTEGER NOT NULL,
+    title         TEXT,
+    summary       TEXT NOT NULL,
+    engine        TEXT,
+    model         TEXT,
+    tokens_in     INTEGER DEFAULT 0,
+    tokens_out    INTEGER DEFAULT 0,
+    cost          REAL DEFAULT 0,
+    updated_at    TEXT,
+    PRIMARY KEY (doc_id, chapter_index)
+);
 """
 
 TRANSLATABLE = ("heading", "paragraph", "footnote")
@@ -286,3 +302,83 @@ def dump_segments(conn: sqlite3.Connection, doc_id: str | None = None) -> list[d
 
 def to_json(obj: Any) -> str:  # pragma: no cover - 便捷调试
     return json.dumps(obj, ensure_ascii=False, indent=2)
+
+
+# ── 滚动摘要（M3）───────────────────────────────────────────────────
+def put_summary(conn: sqlite3.Connection, doc_id: str, chapter_index: int, *,
+                summary: str, title: str = "", engine: str = "", model: str = "",
+                tokens_in: int = 0, tokens_out: int = 0, cost: float = 0.0) -> None:
+    """写入"截至第 `chapter_index` 章"的累积梗概（同章重跑覆盖）。"""
+    conn.execute(
+        "INSERT INTO chapter_summary(doc_id,chapter_index,title,summary,engine,model,"
+        "tokens_in,tokens_out,cost,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(doc_id,chapter_index) DO UPDATE SET title=excluded.title, "
+        "summary=excluded.summary, engine=excluded.engine, model=excluded.model, "
+        "tokens_in=excluded.tokens_in, tokens_out=excluded.tokens_out, "
+        "cost=excluded.cost, updated_at=excluded.updated_at",
+        (doc_id, chapter_index, title, summary, engine, model,
+         tokens_in, tokens_out, cost, _now()),
+    )
+    conn.commit()
+
+
+def summaries(conn: sqlite3.Connection, doc_id: str) -> dict[int, str]:
+    """取某本书所有章的摘要：{chapter_index: summary}。"""
+    return {r["chapter_index"]: r["summary"] for r in conn.execute(
+        "SELECT chapter_index, summary FROM chapter_summary WHERE doc_id=?", (doc_id,))}
+
+
+def summaries_with_titles(conn: sqlite3.Connection, doc_id: str) -> dict[int, tuple[str, str]]:
+    """{chapter_index: (summary, title)}——注入前情时要带上章名。"""
+    return {r["chapter_index"]: (r["summary"], r["title"] or "")
+            for r in conn.execute(
+                "SELECT chapter_index, summary, title FROM chapter_summary WHERE doc_id=?",
+                (doc_id,))}
+
+
+def summary_before(conn: sqlite3.Connection, doc_id: str, chapter_index: int,
+                   window: int = 4) -> str:
+    """翻译第 `chapter_index` 章时应看到的**前情**：最近 `window` 章的摘要。
+
+    只取**严格早于**本章的章——不是"第 N-1 章"，因为中间章可能还没生成摘要
+    （`tp summarize` 可分批跑）。总量由"窗口 × 每章预算"确定性封顶，
+    不依赖模型自觉遵守字数上限（实测累积式摘要会一章比一章长）。
+    """
+    rows = conn.execute(
+        "SELECT chapter_index, title, summary FROM chapter_summary "
+        "WHERE doc_id=? AND chapter_index<? ORDER BY chapter_index DESC LIMIT ?",
+        (doc_id, chapter_index, max(1, window))).fetchall()
+    if not rows:
+        return ""
+    parts = [f"第 {r['chapter_index']} 章「{r['title'] or '无题'}」：{r['summary']}"
+             for r in reversed(rows)]
+    return "前情提要：\n" + "\n".join(parts)
+
+
+def summary_stats(conn: sqlite3.Connection, doc_id: str) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT COUNT(*) n, IFNULL(SUM(cost),0) cost, IFNULL(SUM(tokens_in),0) ti, "
+        "IFNULL(SUM(tokens_out),0) tos FROM chapter_summary WHERE doc_id=?",
+        (doc_id,)).fetchone()
+    return {"chapters": row["n"], "cost": row["cost"],
+            "tokens_in": row["ti"], "tokens_out": row["tos"]}
+
+
+def prune_summaries(conn: sqlite3.Connection, doc_id: str,
+                    keep: Iterable[int]) -> int:
+    """删掉不再属于任何章的摘要行，返回删除数。
+
+    必须做这一步：改了分章规则（比如把目录/奥付排除掉）之后，旧行会留在库里，
+    而 `summary_before` 照取不误——实测旧累积摘要 2393 字被当成"奥付那章的前情"
+    继续注入。摘要与分章规则必须同步。
+    """
+    ids = sorted(set(int(i) for i in keep))
+    if ids:
+        marks = ",".join("?" * len(ids))
+        cur = conn.execute(
+            f"DELETE FROM chapter_summary WHERE doc_id=? AND chapter_index NOT IN ({marks})",
+            (doc_id, *ids))
+    else:
+        cur = conn.execute("DELETE FROM chapter_summary WHERE doc_id=?", (doc_id,))
+    conn.commit()
+    return cur.rowcount or 0

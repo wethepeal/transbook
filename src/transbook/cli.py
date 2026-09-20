@@ -281,6 +281,8 @@ def translate(
     glossary: Path | None = typer.Option(None, "--glossary", help="术语表（.json 或每行 原文=译文）"),
     target_lang: str = typer.Option("zh", "--target-lang"),
     price_tier: str = typer.Option("peak", "--price-tier", help="peak（保守）｜ idle"),
+    rolling_summary: bool = typer.Option(False, "--rolling-summary",
+                                         help="按章注入前情提要（先跑 tp summarize）"),
 ) -> None:
     """③ 翻译：段落 → 译文（可断点续跑、有成本护栏）。"""
     from transbook.config import get
@@ -334,13 +336,87 @@ def translate(
     if ctx.glossary:
         console.print(f"术语表：{len(ctx.glossary)} 条")
 
+    ir = None
+    if rolling_summary:
+        from transbook.ir import DocumentIR
+
+        ir_path = target.parent / "book.ir.json" if target.is_file() else target / "book.ir.json"
+        if not ir_path.is_file():
+            console.print(f"[red]--rolling-summary 需要 book.ir.json：{ir_path}[/red]")
+            raise typer.Exit(2)
+        ir = DocumentIR.model_validate(json.loads(ir_path.read_text(encoding="utf-8")))
+        n = len(conn.execute("SELECT 1 FROM chapter_summary WHERE doc_id=? LIMIT 1",
+                             (ctx.doc_id,)).fetchall())
+        if not n:
+            console.print("[yellow]还没有前情提要——先跑 `tp summarize`，本次将不注入[/yellow]")
+        else:
+            console.print("  [dim]已启用滚动摘要（按章注入前情）[/dim]")
+
     try:
         rep = run(conn, provider, ctx, limit=limit, max_cost=max_cost,
                   batch_chars=batch_chars, batch_items=batch_items, dry_run=dry_run,
+                  ir=ir, rolling_summary=rolling_summary,
                   progress=(None if dry_run else lambda m: console.print(f"  [dim]{m}[/dim]")))
     finally:
         conn.close()
     console.print(("[green]✓[/green] " if not dry_run else "[cyan]◦[/cyan] ") + rep.summary())
+
+
+@app.command()
+def summarize(
+    target: Path = typer.Argument(..., help="工作目录（含 book.ir.json 与 translations.db）"),
+    engine: str = typer.Option("deepseek", "--engine", help="deepseek / local / fake"),
+    model: str | None = typer.Option(None, "--model"),
+    base_url: str | None = typer.Option(None, "--base-url", help="本地 OpenAI 兼容端点"),
+    budget: int = typer.Option(800, "--budget", help="注入前情的总字数上限"),
+    window: int = typer.Option(4, "--window", help="注入最近几章的摘要"),
+    chapter_chars: int = typer.Option(6000, "--chapter-chars", help="每章送入的原文上限"),
+    force: bool = typer.Option(False, "--force", help="全部重新生成（默认沿用已有）"),
+    price_tier: str = typer.Option("peak", "--price-tier"),
+) -> None:
+    """⑩ 滚动摘要：按章生成累积前情提要，供 `tp translate --rolling-summary` 注入。"""
+    from transbook.config import get
+    from transbook.ir import DocumentIR
+    from transbook.store import connect
+    from transbook.translate import BookContext, DeepSeekProvider, FakeProvider
+    from transbook.translate.deepseek import DEFAULT_BASE_URL
+    from transbook.translate.summary import generate_summaries
+
+    work = target if target.is_dir() else target.parent
+    ir_path = work / "book.ir.json"
+    db_path = _resolve_db(target)
+    if not ir_path.is_file() or not db_path.is_file():
+        console.print(f"[red]缺少 book.ir.json 或 translations.db：{work}[/red]")
+        raise typer.Exit(1)
+    ir = DocumentIR.model_validate(json.loads(ir_path.read_text(encoding="utf-8")))
+
+    if engine == "fake":
+        provider = FakeProvider()
+    elif engine in ("deepseek", "local"):
+        key = get("DEEPSEEK_API_KEY") or ""
+        if not key:
+            console.print("[red]未配置 DEEPSEEK_API_KEY[/red]")
+            raise typer.Exit(2)
+        extra = ({"chat_template_kwargs": {"enable_thinking": False}} if engine == "local"
+                 else {"thinking": {"type": "disabled"}})
+        provider = DeepSeekProvider(
+            key, model=model or get("TRANSLATE_MODEL") or "deepseek-flash",
+            base_url=base_url or get("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL,
+            price_tier=price_tier, extra_body=extra)
+    else:
+        console.print(f"[red]未知引擎：{engine}[/red]")
+        raise typer.Exit(2)
+
+    ctx = BookContext(doc_id=ir.doc.id, title=ir.doc.title, author=ir.doc.author,
+                      source_lang=ir.doc.source_lang or "ja")
+    conn = connect(db_path)
+    try:
+        rep = generate_summaries(conn, provider, ir, ctx, budget=budget, window=window,
+                                 chapter_chars=chapter_chars, force=force,
+                                 progress=lambda m: console.print(f"  [dim]{m}[/dim]"))
+    finally:
+        conn.close()
+    console.print(f"[green]✓[/green] {rep.summary()}")
 
 
 @app.command()
