@@ -75,8 +75,33 @@ def test_chapter_spans_skip_non_story_matter():
     spans = chapter_spans(ir)
     assert [s.title for s in spans] == ["第一章"]
     assert [b.id for b in spans[0].blocks] == ["b3", "b4"]
-    # 章号允许不连续：目录占了 1 号但被丢弃，正文仍是 2 号，取前情用 `<` 比较不受影响
-    assert spans[0].index == 2
+    # 被跳过的页不占章号：正文就是第 1 章（取前情用 `<` 比较，序号不连续也没问题）
+    assert spans[0].index == 1
+
+
+def test_chapter_spans_do_not_label_front_matter_as_chapter():
+    """封面/目次标题不能**开启**一章。
+
+    实测真实样书：只看标题层级的话，「表紙」会成为第 1 章，而夹在它和
+    「CONTENTS」之间的版权页文字（matter=main）会被算进「表紙」那一章，
+    结果给版权声明写了一份"前情提要"。
+    """
+    blocks = [
+        Block(id="b1", type="heading", level=1, text="表紙", matter="cover"),
+        Block(id="b2", type="paragraph", text="本电子书的缩略图可能变更。", matter="main"),
+        Block(id="b3", type="heading", level=1, text="CONTENTS", matter="toc"),
+        Block(id="b4", type="paragraph", text="第一章……", matter="toc"),
+        Block(id="b5", type="heading", level=1, text="プロローグ", matter="main"),
+        Block(id="b6", type="paragraph", text="正文开始。", matter="main"),
+    ]
+    ir = DocumentIR(doc=DocMeta(id="d", title="t", origin="epub"), blocks=blocks)
+    spans = chapter_spans(ir)
+    titles = [s.title for s in spans]
+    assert "表紙" not in titles and "CONTENTS" not in titles
+    assert "プロローグ" in titles
+    # 封面与目次之间的正文块归入「前言」，不会挂到「表紙」名下
+    front = next(s for s in spans if s.title == "（前言）")
+    assert [b.id for b in front.blocks] == ["b2"]
 
 
 # ── 提示词 ──────────────────────────────────────────────────────────
@@ -134,6 +159,65 @@ def test_generate_summaries_prunes_stale_rows(tmp_path):
     rep = generate_summaries(conn, FakeProvider(), make_ir(), BookContext(doc_id="doc"))
     assert rep.pruned == 1
     assert 99 not in summaries(conn, "doc")
+    conn.close()
+
+
+def test_progress_callback_signature_matches_pipeline(tmp_path):
+    """进度回调必须是 `(message, fraction)` **两个参数**——与流水线其它阶段一致。
+
+    回归：曾经这里只传一个参数，而 CLI 与 `service.pipeline` 传的都是双参 lambda，
+    第一次回调就抛 TypeError，整轮只生成 1 章就中断（真实书验收时才暴露）。
+    """
+    conn = connect(tmp_path / "t.db")
+    seen: list[tuple[str, float]] = []
+    generate_summaries(conn, FakeProvider(), make_ir(), BookContext(doc_id="doc"),
+                       progress=lambda m, f: seen.append((m, f)))
+    assert len(seen) == 4, f"每章都应回调一次，实际 {len(seen)}"
+    assert all(isinstance(f, float) and 0 < f <= 1.0 for _, f in seen)
+    assert [f for _, f in seen] == sorted(f for _, f in seen), "进度应单调"
+    conn.close()
+
+
+def test_pipeline_summarize_band_wrapper(tmp_path):
+    """`service.pipeline` 的 `_band` 包了一层，链路也要能跑通。"""
+    from transbook.service.pipeline import _band
+
+    conn = connect(tmp_path / "t.db")
+    seen: list[float] = []
+    generate_summaries(conn, FakeProvider(), make_ir(), BookContext(doc_id="doc"),
+                       progress=_band(lambda m, f: seen.append(f), 0.05, 1.0))
+    assert seen and all(0.05 <= f <= 1.0 for f in seen), seen
+    conn.close()
+
+
+def test_generate_summaries_survives_one_bad_chapter(tmp_path):
+    """一章失败不能拖垮整轮——摘要本身是可选增强。
+
+    实测：某章调用抛异常，早期版本直接冒泡，整轮只生成了 1 章就中断，
+    而 `--rolling-summary` 后面还会照常注入那份残缺的前情。
+    """
+    conn = connect(tmp_path / "t.db")
+
+    class Flaky(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def complete(self, messages):
+            self.n += 1
+            if self.n == 2:
+                raise RuntimeError("限流")
+            return super().complete(messages)
+
+    rep = generate_summaries(conn, Flaky(), make_ir(), BookContext(doc_id="doc"))
+    assert rep.failed == 1 and rep.generated == 3
+    # 第 2 次调用（章节序号 1）抛异常，那一章不该写入，其余照常
+    assert 1 not in summaries(conn, "doc"), "失败的那章不该写入"
+    assert 0 in summaries(conn, "doc") and 2 in summaries(conn, "doc")
+    # 再跑一次会自动补上缺的那章
+    rep2 = generate_summaries(conn, FakeProvider(), make_ir(), BookContext(doc_id="doc"))
+    assert rep2.generated == 1 and rep2.skipped == 3 and rep2.failed == 0
+    assert 1 in summaries(conn, "doc")
     conn.close()
 
 

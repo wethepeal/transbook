@@ -80,13 +80,17 @@ def chapter_spans(ir: DocumentIR, *,
     counter = 0  # 独立计数：用 len(spans) 会在 append 之后跳号（踩过）
     for b in ir.blocks:
         if b.type == "heading" and (b.level or 1) <= top and b.text.strip():
+            # **只有本身属于正文的标题才开一章**：封面/目次/奥付的标题不算章。
+            # 只看标题层级的话，「表紙」「CONTENTS」会被当成章节去写摘要，
+            # 还把夹在它们之间的版权页文字算进了「表紙」那一章（实测踩过）。
+            if b.matter not in matter:
+                continue
             if cur.blocks:
                 spans.append(cur)
             counter += 1
             # 标题块自己也算本章成员：它是可翻译段，翻译时同样要按章取前情；
             # 漏掉它会让 `chapter_of_block` 查不到 → 注入错章（甚至空）
-            cur = ChapterSpan(index=counter, title=b.text.strip(),
-                              blocks=[b] if b.matter in matter else [])
+            cur = ChapterSpan(index=counter, title=b.text.strip(), blocks=[b])
             continue
         if b.is_translatable() and b.matter in matter:
             cur.blocks.append(b)
@@ -124,13 +128,15 @@ class SummaryReport:
     chapters: int = 0
     generated: int = 0
     skipped: int = 0
+    failed: int = 0
     pruned: int = 0
     usage: Usage = field(default_factory=Usage)
 
     def summary(self) -> str:
         tail = f" ｜ 清理过期 {self.pruned}" if self.pruned else ""
+        fail = f" ｜ [yellow]失败 {self.failed}[/yellow]" if self.failed else ""
         return (f"章节 {self.chapters} ｜ 新生成 {self.generated} ｜ 沿用已有 {self.skipped}"
-                f"{tail} ｜ token 入 {self.usage.tokens_in:,} / 出 {self.usage.tokens_out:,} ｜ "
+                f"{tail}{fail} ｜ token 入 {self.usage.tokens_in:,} / 出 {self.usage.tokens_out:,} ｜ "
                 f"花费 ¥{self.usage.cost:.4f}")
 
 
@@ -140,23 +146,38 @@ def generate_summaries(conn: sqlite3.Connection, provider: TranslationProvider,
                        window: int = DEFAULT_WINDOW,
                        chapter_chars: int = DEFAULT_CHAPTER_CHARS,
                        force: bool = False,
-                       progress: Callable[[str], None] | None = None) -> SummaryReport:
+                       progress: Callable[[str, float], None] | None = None) -> SummaryReport:
     """逐章生成**独立**短摘要并落库（每章一次调用）。
 
     已生成过的章默认沿用（省钱、可断点续跑）。`force=True` 全部重生成。
+
+    `progress` 的契约是 **`(message, fraction)` 两个参数**，与流水线其它阶段一致。
+    曾经这里只传一个参数、而调用方传的是双参 lambda，第一次回调就抛 TypeError，
+    结果整轮只生成了 1 章就中断——所以签名必须和别处统一。
     """
     spans = chapter_spans(ir)
     existing = store.summaries(conn, ir.doc.id)
     per_chapter = per_chapter_budget(budget, window)
     rep = SummaryReport(chapters=len(spans))
-    for span in spans:
+    total = max(1, len(spans))
+    for i, span in enumerate(spans):
+        frac = (i + 1) / total
         if not force and span.index in existing:
             rep.skipped += 1
             continue
         messages = build_summary_messages(span, source_lang=ctx.source_lang,
                                           per_chapter=per_chapter,
                                           chapter_chars=chapter_chars)
-        text, usage = provider.complete(messages)
+        try:
+            text, usage = provider.complete(messages)
+        except Exception as exc:  # noqa: BLE001
+            # **一章失败不能拖垮整轮**：摘要本身是可选增强，某一章因网络或限流失败时
+            # 应当跳过它继续后面的（重跑一次会自动补上缺的那章）。
+            rep.failed += 1
+            if progress:
+                progress(f"第 {span.index} 章「{span.title}」摘要失败："
+                         f"{type(exc).__name__}: {exc}", frac)
+            continue
         summary = (text or "").strip()
         if not summary:
             rep.skipped += 1
@@ -168,7 +189,7 @@ def generate_summaries(conn: sqlite3.Connection, provider: TranslationProvider,
         rep.generated += 1
         rep.usage.add(usage)
         if progress:
-            progress(f"第 {span.index} 章「{span.title}」梗概 {len(summary)} 字")
+            progress(f"第 {span.index} 章「{span.title}」梗概 {len(summary)} 字", frac)
     # 分章规则可能变了（比如这次把目录/奥付排除掉），旧行必须清掉，
     # 否则 `summary_before` 会把陈旧摘要当成前情继续注入（实测踩过）
     rep.pruned = store.prune_summaries(conn, ir.doc.id, (s.index for s in spans))

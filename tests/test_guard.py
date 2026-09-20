@@ -134,3 +134,65 @@ def test_error_retry_still_works(db):
     rep = run(db, prov, BookContext(doc_id="doc"), batch_items=10)
     assert rep.translated == 2 and rep.failed == 0 and rep.retried == 1
     assert rep.guarded == 0
+
+
+# ── JSON 解析失败要重试，不能整批判死 ────────────────────────────────
+def test_format_error_is_retried(db):
+    """模型偶发吐出无法解析的 JSON（长批次尤其容易），重发一次通常就好。
+
+    早期版本在这里直接终止整批——实测一本真实书白丢 30 段。
+    """
+    from transbook.translate.deepseek import TranslationFormatError
+
+    ids = _seed(db, ["一段比较长的日文原文，用来触发批次。", "另一段日文原文。"])
+
+    class BadJsonOnce(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.tries = 0
+
+        def translate(self, batch, ctx, *, strict=False):
+            self.tries += 1
+            if self.tries == 1:
+                raise TranslationFormatError("Expecting ',' delimiter: line 1 column 99")
+            return super().translate(batch, ctx, strict=strict)
+
+    prov = BadJsonOnce()
+    rep = run(db, prov, BookContext(doc_id="doc"), batch_items=10)
+    assert prov.tries == 2, "应当重试而不是直接判失败"
+    assert rep.translated == 2 and rep.failed == 0
+    assert prov.strict_calls == [True], "重试那一次必须带 strict（换强指令提示词）"
+
+
+def test_format_error_gives_up_after_max_rounds(db):
+    from transbook.translate.deepseek import TranslationFormatError
+
+    ids = _seed(db, ["日文原文一段。"])
+
+    class AlwaysBadJson(FakeProvider):
+        def translate(self, batch, ctx, *, strict=False):
+            raise TranslationFormatError("坏 JSON")
+
+    rep = run(db, AlwaysBadJson(), BookContext(doc_id="doc"), batch_items=10, max_rounds=3)
+    assert rep.failed == 1
+    row = db.execute("SELECT last_error FROM segment WHERE seg_id=?", (ids[0],)).fetchone()
+    assert "TranslationFormatError" in row["last_error"]
+
+
+def test_network_error_does_not_retry_forever(db):
+    """网络/鉴权错误重试没有意义，应立即判失败，别白等三轮。"""
+    ids = _seed(db, ["日文原文一段。"])
+
+    class Boom(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.tries = 0
+
+        def translate(self, batch, ctx, *, strict=False):
+            self.tries += 1
+            raise RuntimeError("连接被拒绝")
+
+    prov = Boom()
+    rep = run(db, prov, BookContext(doc_id="doc"), batch_items=10, max_rounds=3)
+    assert prov.tries == 1, "非格式错误不该重试"
+    assert rep.failed == 1

@@ -24,6 +24,7 @@ from transbook.translate.base import (
     estimate_tokens,
     make_batches,
 )
+from transbook.translate.deepseek import TranslationFormatError
 from transbook.translate.prompts import PROMPT_VERSION
 
 #: 未译护栏的生效下限：原文短于此长度就放过。
@@ -190,7 +191,17 @@ def _translate_batch_with_repair(
             break
         try:
             outs, usage = provider.translate(pending_items, ctx, strict=strict)
-        except Exception as exc:  # noqa: BLE001 - 网络/解析错误统一降级为该批失败
+        except TranslationFormatError as exc:
+            # 模型偶发吐出无法解析的 JSON（长批次尤其容易）。这**不是**环境故障，
+            # 重发一次通常就好——早期版本在这里直接终止整批，实测一本书白丢 30 段。
+            total.add(Usage(calls=1))
+            if attempt + 1 >= max_rounds:
+                for it in pending_items:
+                    results[it.seg_id] = _err(it.seg_id, f"{type(exc).__name__}: {exc}"[:200])
+                break
+            strict = True  # 提示词换成"严格遵守 JSON"的强指令
+            continue
+        except Exception as exc:  # noqa: BLE001 - 网络/鉴权等错误重试无意义，直接判失败
             for it in pending_items:
                 results[it.seg_id] = _err(it.seg_id, f"{type(exc).__name__}: {exc}")
             break
