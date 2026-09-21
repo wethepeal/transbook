@@ -63,6 +63,27 @@ class Project:
                 return p
         return None
 
+    def last_activity(self) -> float:
+        """最后一次活动时间，用于列表排序。
+
+        取目录里**所有文件**的最新 mtime，而不是目录自身的：目录的 mtime 只在增删
+        直接子项时更新，改 `translations.db` 的内容并不会动它——那样翻译完一本书，
+        这个项目也不会往前排。
+        """
+        newest = 0.0
+        try:
+            for f in self.dir.iterdir():
+                if f.is_file():
+                    newest = max(newest, f.stat().st_mtime)
+        except OSError:
+            pass
+        if newest:
+            return newest
+        try:
+            return self.dir.stat().st_mtime
+        except OSError:
+            return 0.0
+
     def exists(self) -> bool:
         """项目是否存在。
 
@@ -78,22 +99,28 @@ def project_of(root: Path, doc_id: str) -> Project:
 
 
 def list_projects(root: Path) -> list[Project]:
-    """列出工作根下的所有项目。
+    """列出工作根下的所有项目，**最近活动的排在前面**。
 
-    用 `exists()` 而不是"有没有 book.ir.json"：刚上传、抽取还没跑完的项目
-    也应该出现在列表里，否则用户上传完在首页看不到自己刚建的项目。
+    两个决定：
+
+    * 用 `exists()` 而不是"有没有 book.ir.json"：刚上传、抽取还没跑完的项目
+      也应该出现在列表里，否则用户上传完在首页看不到自己刚建的项目。
+    * 按 `last_activity()` 倒序而不是按名字：浏览逻辑是"我刚动过的在最上面"，
+      按字母排会让新建的项目沉到列表底部、每次都要找。同一时间戳的按名字排，
+      保证顺序稳定、不会每次刷新都跳。
     """
     base = Path(root)
     if not base.is_dir():
         return []
-    out: list[Project] = []
-    for d in sorted(base.iterdir()):
+    projects = []
+    for d in base.iterdir():
         if not d.is_dir():
             continue
         proj = Project(d.name, d)
         if proj.exists():
-            out.append(proj)
-    return out
+            projects.append(proj)
+    projects.sort(key=lambda p: (-p.last_activity(), p.doc_id))
+    return projects
 
 
 def store_source(root: Path, doc_id: str, filename: str, data: bytes) -> Project:

@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -132,6 +134,67 @@ def test_source_file_is_not_listed_as_output(client: TestClient):
 def test_nonexistent_project_still_404(client: TestClient):
     """放宽存在判定之后，真的不存在的项目仍要 404——别把两种情况混成一团。"""
     assert client.get("/api/books/never-existed").status_code == 404
+
+
+# ── 列表排序：最近活动的在最前 ──────────────────────────────────────
+def _make_project(root: Path, name: str, age_seconds: float) -> P.Project:
+    """造一个项目，并把它的文件时间往前拨 age_seconds 秒。"""
+    proj = P.project_of(root, name)
+    proj.dir.mkdir(parents=True)
+    f = proj.dir / "source.epub"
+    f.write_bytes(b"PK\x03\x04")
+    stamp = time.time() - age_seconds
+    os.utime(f, (stamp, stamp))
+    return proj
+
+
+def test_projects_sorted_newest_first(tmp_path: Path):
+    """越新的排越前——浏览逻辑是"我刚动过的在最上面"。
+
+    回归：原来按目录名排序，新建的项目会沉到列表底部，每次都要去找。
+    """
+    root = tmp_path / "work"
+    root.mkdir()
+    _make_project(root, "alpha", age_seconds=3000)
+    _make_project(root, "beta", age_seconds=2000)
+    _make_project(root, "gamma", age_seconds=1000)
+
+    assert [p.doc_id for p in P.list_projects(root)] == ["gamma", "beta", "alpha"]
+
+
+def test_translating_moves_project_to_top(tmp_path: Path):
+    """改 `translations.db` 的内容也要算"活动"。
+
+    这里刻意不去动目录本身：目录的 mtime 只在增删直接子项时更新，
+    所以排序必须看**文件**的 mtime，否则翻完一本书它也不会往前排。
+    """
+    root = tmp_path / "work"
+    root.mkdir()
+    _make_project(root, "old", age_seconds=3000)
+    proj = _make_project(root, "new", age_seconds=2000)
+    assert [p.doc_id for p in P.list_projects(root)] == ["new", "old"]
+
+    # 模拟翻译写库：新建一个 db 文件（比改旧文件更快，mtime 必然最新）
+    proj.db_path.write_bytes(b"db")
+    assert [p.doc_id for p in P.list_projects(root)][0] == "new"
+
+
+def test_sort_is_stable_for_equal_timestamps(tmp_path: Path):
+    """时间戳相同时按名字排，保证刷新列表顺序不乱跳。"""
+    root = tmp_path / "work"
+    root.mkdir()
+    same = time.time() - 500
+    for name in ("zeta", "alpha", "mid"):
+        proj = P.project_of(root, name)
+        proj.dir.mkdir(parents=True)
+        f = proj.dir / "source.epub"
+        f.write_bytes(b"PK\x03\x04")
+        os.utime(f, (same, same))
+
+    ids = [p.doc_id for p in P.list_projects(root)]
+    assert ids == ["alpha", "mid", "zeta"]
+    # 再列一次结果一样（稳定）
+    assert [p.doc_id for p in P.list_projects(root)] == ids
 
 
 def test_render_names_outputs_after_book_title(tmp_path: Path):

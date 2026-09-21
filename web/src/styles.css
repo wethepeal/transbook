@@ -514,18 +514,42 @@ button.tiny {
 
 /* ── 项目列表的列宽 ─────────────────────────────────── */
 /* 不约束的话自动布局会把「状态」撑得很宽、把「产物」挤扁（实测截图）。
-   项目名与产物需要弹性，状态与操作固定宽度就够。 */
+   项目名与产物需要弹性，状态与操作固定宽度就够。
+   项目列给 160px 而不是按百分比：项目名是短标识（`re0-v44`、`user-test` 这种），
+   给四分之一宽度的话，名字和「状态」之间会空出一大片（实测约 130px 空白）。
+   160px 放得下 20 来个字符，再长就省略号。 */
 .table-projects col.c-name {
-  width: 24%;
+  width: 160px;
+}
+/* auto 布局下 colgroup 的宽度只是"建议"，浏览器仍会按内容再分配一次——
+   实测给了 160px 却渲染成 200px 出头。fixed 才让列宽真正说了算。
+   单元格里的长内容靠各自的 max-width + 省略号收住。 */
+.table-projects {
+  table-layout: fixed;
 }
 .table-projects col.c-status {
   width: 88px;
 }
 .table-projects col.c-source {
-  width: 17%;
+  width: 16%;
 }
 .table-projects col.c-action {
-  width: 88px;
+  width: 96px;
+}
+/* 「状态」「操作」两列都是短标签/短按钮，左对齐会在列里显得偏左，
+   整列居中——表头与单元格一起居中，两者才对得齐 */
+.table-projects th:nth-child(2),
+.table-projects td:nth-child(2),
+.table-projects th:nth-child(5),
+.table-projects td:nth-child(5) {
+  text-align: center;
+}
+/* 项目名过长时省略，别把列撑开 */
+.table-projects td.name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── 统计 ───────────────────────────────────────────── */
