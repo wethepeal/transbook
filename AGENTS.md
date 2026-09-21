@@ -57,8 +57,12 @@ data/work/<书>/    每本书一个工作目录（全部不入库）
   那个不变量——也踩过一次，CI 直接红了。
 - **Windows 上输出被重定向时按 ANSI 代码页编码**，中文会 `UnicodeEncodeError`。
   新脚本要在顶部调 `transbook.console.tolerate_unencodable_output()`。
-- **默认端口 8321 可能落在 Windows 保留区段里**（Hyper-V/WSL/Docker 占 8xxx 段），
-  `tp serve` 会自动往后找；查保留段：`netsh int ipv4 show excludedportrange protocol=tcp`。
+- **`tp serve` 的端口不一定是 8321**。8321 只是默认值；被 Windows 保留区段占用时会
+  自动往后让开，**实际地址以启动时打印的那行为准**。本机保留了 `8163-8362`，8321 正好
+  在里面，所以每次都会让开——要固定地址就 `--port 9000`。
+  查保留段：`netsh int ipv4 show excludedportrange protocol=tcp`。
+  前端开发模式（`npm run dev`）的代理目标默认写死 8321，与后端对不上时接口全挂，
+  要么固定后端端口，要么在 `web/.env.local` 写 `TRANSBOOK_API`。
 
 ## 记忆维护协议
 

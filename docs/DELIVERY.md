@@ -112,7 +112,8 @@ tp translate $W --engine deepseek --model deepseek-flash --max-cost 3 --price-ti
 tp serve --root data\work
 ```
 
-浏览器打开 `http://127.0.0.1:8321/`，在首页上传 EPUB/PDF、选引擎、点「上传并开始翻译」，然后看着进度条跑完，点「校对」进去逐段改，回详情页下载成品。
+浏览器打开**启动时打印的那个地址**（默认 `http://127.0.0.1:8321/`，端口被系统保留时会
+自动让开，见 §4），在首页上传 EPUB/PDF、选引擎、点「上传并开始翻译」，然后看着进度条跑完，点「校对」进去逐段改，回详情页下载成品。
 
 ---
 
@@ -333,11 +334,23 @@ tp setup --yes                 # 非交互：没配置也不问，直接跳过
 ## 4. 操作手册 · Web 界面
 
 ```powershell
-tp serve --root data\work            # 界面 http://127.0.0.1:8321/ ｜ 接口文档 /docs
+tp serve --root data\work            # 默认端口 8321（见下方"端口"）
 tp serve --root data\work --open     # 起好之后自动开浏览器（发布包的 start.cmd 用这个）
+tp serve --root data\work --port 9000  # 想固定端口就显式指定
 ```
 
-> **端口被系统保留时**：Windows 会把一些 TCP 区段**保留**给 Hyper-V / WSL / Docker，
+> ### 端口：**以启动时打印的地址为准**
+>
+> `8321` 只是**默认值**，不保证就是实际地址。`tp serve` 启动时会先探测：
+> 默认端口不可用就自动往后找，并打印换成了哪个口。所以**看这两行输出**：
+>
+> ```
+> 端口 8321 不可用，自动改用 8364          ← 有这行说明让开了
+> transbook 服务 http://127.0.0.1:8364     ← 这才是当前地址
+>   界面    http://127.0.0.1:8364/ ｜ 项目根 ...
+> ```
+>
+> **为什么会不可用**：Windows 会把一些 TCP 区段**保留**给 Hyper-V / WSL / Docker，
 > 落在里面的端口连 `bind` 都不允许，报错是"以一种访问权限不允许的方式做了一个
 > 访问套接字的尝试"——看着像权限问题，其实是端口被系统占着了。查保留区段：
 >
@@ -345,9 +358,12 @@ tp serve --root data\work --open     # 起好之后自动开浏览器（发布�
 > netsh int ipv4 show excludedportrange protocol=tcp
 > ```
 >
-> `tp serve` 会**先探测再启动**，默认端口不可用时自动往后找（实测本机保留了
-> `8163-8262` 与 `8263-8362`，默认的 8321 正好落在里面，服务自动让到了 8365）。
-> 也可以直接指定：`tp serve --port 9000`。
+> 实测本机保留了 `8163-8262` 与 `8263-8362` 两段，**默认的 8321 正好落在里面**，
+> 所以这台机器上每次启动都会让开（通常是 8364 附近，具体取决于当时哪些端口空闲）。
+> 保留区段是**动态的**，重启或开虚拟机后可能变，所以文档里不写死一个"当前地址"。
+>
+> **想固定地址**（比如要收藏、或前端开发模式要配代理）：`tp serve --port 9000`，
+> 挑一个不在保留区段里的端口。
 
 | 页面 | 能干什么 |
 |---|---|
@@ -469,9 +485,20 @@ SHA256 前后一致）；「当前生效」卡片随即显示新模型，证实�
 > **前端开发模式**（改界面时用，热更新）：
 > ```powershell
 > cd web
-> npm run dev        # http://127.0.0.1:5173，/api 自动代理到 8321
+> npm run dev        # http://127.0.0.1:5173
 > ```
 > 改完必须 `npm run build` 才会反映到 `tp serve` 的界面上。
+>
+> ⚠️ **开发模式要自己告诉它后端在哪**：`vite.config.ts` 默认把 `/api` 代理到
+> `http://127.0.0.1:8321`，而 `tp serve` 的端口**可能不是 8321**（见 §4）。
+> 对不上时页面能开但所有接口都失败。两种做法：
+>
+> ```powershell
+> # ① 启动后端时固定端口（推荐，简单）
+> tp serve --root data\work --port 9000
+> # ② 或告诉前端后端在哪：在 web\.env.local 里写（该文件已在 .gitignore 中）
+> #    TRANSBOOK_API=http://127.0.0.1:8364
+> ```
 
 ---
 
@@ -975,10 +1002,10 @@ tp render  data/work/X -m bilingual --to both         # ⑤ 双语，审核
 tp render  data/work/X -m zh --to both                # ⑤ 纯中文终版
 tp validate data/work/X                 # ⑨ 校验
 
-# 跑（界面）
-tp serve --root data/work               # → http://127.0.0.1:8321/
+# 跑（界面）—— 8321 只是默认值，**实际地址看启动时打印的那行**
+tp serve --root data/work               # 默认 http://127.0.0.1:8321/
 tp serve --root data/work --open        # 顺便自动开浏览器
-#   端口被 Windows 保留区段占用时会自动往后找并打印新端口；也可 --port 9000
+tp serve --root data/work --port 9000   # 端口被系统保留时，想固定就用这个
 # 界面上：
 #   「配置」(#/settings) 填/换 API Key，改完立即生效，不用重启
 #   项目列表按最近活动排序，每行可「删除」清空该项目内容（任务日志保留）

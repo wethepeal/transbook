@@ -152,13 +152,15 @@ tp setup
 
 # Web 界面（M6）：**源码跑必须先构建一次**，否则 `tp serve` 只提供接口
 cd web; npm install; npm run build; cd ..
-tp serve --root data/work           # 界面 http://127.0.0.1:8321/ ｜ 接口文档 /docs
+tp serve --root data/work           # 默认 8321；**实际地址看启动时打印的那行**
 tp serve --root data/work --open    # 顺便自动开浏览器
-#   端口被 Windows 保留区段占用时（Hyper-V/WSL/Docker 会占 8xxx 段）会自动往后找，
-#   并打印换成了哪个口；也可直接 tp serve --port 9000
+tp serve --root data/work --port 9000  # 想固定端口就用这个
+#   本机 8163-8362 被系统保留（Hyper-V/WSL/Docker），8321 落在里面 → 每次都会让开
 
 # 前端开发模式（热更新，不用每次 build）
-cd web; npm run dev                 # http://127.0.0.1:5173，/api 自动代理到 8321
+cd web; npm run dev                 # http://127.0.0.1:5173
+#   ⚠ 代理目标默认写死 http://127.0.0.1:8321，与后端实际端口对不上时接口全挂；
+#     要么给后端 --port 9000 固定住，要么在 web\.env.local 写 TRANSBOOK_API=<实际地址>
 
 # 提交前自检（CI 跑的就是这三条，任何一条红都不该推）
 uv run pytest -q                    # 335 项
