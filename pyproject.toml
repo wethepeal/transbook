@@ -2,7 +2,7 @@
 name = "transbook"
 version = "0.1.0"
 description = "电子书翻译流水线：PDF/EPUB 电子书（英/日）→ 中文（EPUB/PDF 输出）"
-readme = "docs/plan.md"
+readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.9",

@@ -39,6 +39,18 @@
   --warn-line: #4a4028;
   --err-line: #4a2b2b;
 
+  /* 阴影与悬停遮罩也要走 token：深色下"更亮 = 更高"，浅色下反过来，
+     写成硬编码的话浅色主题里会立刻露馅 */
+  --shadow-card: 0 1px 2px rgb(8 12 20 / 40%);
+  --overlay-hover: rgb(255 255 255 / 8%);
+
+  /* 表单控件的边框要单独一个 token，而且必须**明显比 --line 亮**。
+     原因：输入框的填充色（--panel-2）与卡片底色（--panel）几乎一致
+     （深色下只有 1.10:1），所以"这是个输入框"完全靠边框来表达；而 WCAG 1.4.11
+     要求识别控件所需的边界至少 3:1。--line 是给分隔线/卡片边框用的装饰性颜色，
+     不该拿来做控件的唯一边界。 */
+  --field-line: #5d6879;
+
   /* ── 圆角 ─────────────────────────────────────────── */
   --r-sm: 6px;
   --r-md: 8px;
@@ -73,9 +85,55 @@
   --font-book: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
   --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
 
-  /* ── 层级 ─────────────────────────────────────────── */
+  /* 层级 */
   --z-sticky: 10;
   --z-skip: 100;
+
+  /* 让原生控件（滚动条、下拉列表、日期选择器）跟着走深色。
+     这是 `color-scheme` 属性而不是 meta 标签——切主题时能跟着变。 */
+  color-scheme: dark;
+}
+
+/* ── 浅色主题 ─────────────────────────────────────────
+   **不是把深色反过来**：深色的层级靠"更亮的表面"，浅色靠"更深的边框 + 更浅的底"，
+   两者的表达方式相反。所以这里按浅色的逻辑重新定了一套值，而不是取反。
+
+   颜色名保持完全一致，所以所有组件一行都不用改。
+
+   生效方式：`<html data-theme="light">`，由顶栏的按钮写入；用户没选过时跟随系统。 */
+[data-theme='light'] {
+  --bg: #f5f7fa;
+  --panel: #ffffff;
+  --panel-2: #f1f4f8;
+  --panel-3: #e8ecf2;
+  --line: #d9dee7;
+  --line-soft: #ebeff4;
+  --fg: #1c2027;
+  --fg-strong: #0b0e13;
+  --dim: #59616e;
+  --dimmer: #7d8593;
+
+  /* 强调色必须压深：深色主题那个 #7ea9e0 放白底上对比度只有 2 出头，读不了 */
+  --accent: #2a68a8;
+  --accent-ink: #ffffff;
+  --accent-soft: #e3edf9;
+
+  --ok: #15703f;
+  --warn: #7a5800;
+  --err: #a83228;
+  --ok-soft: #e6f4ec;
+  --warn-soft: #fbf1dd;
+  --err-soft: #fdecea;
+  --ok-line: #b7ddc7;
+  --warn-line: #edd9a8;
+  --err-line: #f0c1bc;
+
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 8%);
+  --overlay-hover: rgb(0 0 0 / 6%);
+  /* 同理：白底上要压到 #8d939f 才有 3.09:1（取最接近阈值的，边框尽量轻） */
+  --field-line: #8d939f;
+
+  color-scheme: light;
 }
 
 * {
@@ -186,6 +244,28 @@ a:hover {
   background: var(--panel-2);
   text-decoration: none;
 }
+/* 浅色/深色切换。用内联 SVG 而不是 emoji——图标在两种主题下都走 currentColor */
+.theme-toggle {
+  margin-left: var(--s-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  padding: var(--s-1) var(--s-2);
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--t-md);
+  font-weight: 400;
+  align-self: center;
+  line-height: 1;
+}
+.theme-toggle:hover {
+  color: var(--fg);
+  border-color: var(--dimmer);
+  background: var(--panel-2);
+  filter: none;
+}
 
 /* ── 布局基元 ───────────────────────────────────────── */
 .stack {
@@ -199,7 +279,7 @@ a:hover {
   border-radius: var(--r-lg);
   padding: var(--s-4) var(--s-5);
   /* 阴影带背景的冷色调，而不是纯黑低透明——纯黑会让深色界面发灰 */
-  box-shadow: 0 1px 2px rgb(8 12 20 / 40%);
+  box-shadow: var(--shadow-card);
 }
 .card.sticky {
   position: sticky;
@@ -278,7 +358,7 @@ select,
 .search,
 textarea {
   background: var(--panel-2);
-  border: 1px solid var(--line);
+  border: 1px solid var(--field-line);
   border-radius: var(--r-md);
   color: var(--fg);
   padding: 7px 9px;
@@ -980,7 +1060,7 @@ button.tiny {
 }
 .banner .dismiss:hover {
   opacity: 1;
-  background: rgb(255 255 255 / 8%);
+  background: var(--overlay-hover);
   filter: none;
 }
 
@@ -1102,6 +1182,102 @@ button.tiny {
 .config-active dd {
   margin: 3px 0 0;
   font-size: var(--t-base);
+}
+
+/* ── 快速上手页 ─────────────────────────────────────── */
+/* 这里用序号是**内容本身就是有序的**（一步接一步的流程），不是为了好看——
+   设计规则里"别乱加编号"针对的是把无序内容假装成序列。 */
+.steps {
+  list-style: none;
+  counter-reset: step;
+  padding: 0;
+  margin: var(--s-4) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  max-width: 78ch;
+}
+.steps > li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 42px;
+}
+.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+.steps h3 {
+  margin: 2px 0 var(--s-1);
+  font-size: var(--t-base);
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.steps p {
+  margin: 0 0 var(--s-1);
+  color: var(--dim);
+}
+.step-points {
+  margin: var(--s-1) 0 0;
+  padding-left: 1.15em;
+  color: var(--dim);
+  font-size: var(--t-md);
+}
+.step-points li {
+  margin: 3px 0;
+}
+/* 行内代码与命令块 */
+.cmd {
+  font-family: var(--mono);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 1px 5px;
+  font-size: var(--t-sm);
+  white-space: nowrap;
+}
+.cmdblock {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--s-3);
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  line-height: 1.75;
+  margin: var(--s-2) 0 0;
+  white-space: pre;
+}
+/* 指向外部文档的提示块：给一点强调，让人不会漏掉"还有更全的手册" */
+.callout {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-md);
+  margin-top: var(--s-4);
+  max-width: 78ch;
+}
+.callout h3 {
+  margin: 0 0 var(--s-1);
+  font-size: var(--t-base);
+  color: var(--fg-strong);
+}
+.callout p {
+  margin: 0;
+  color: var(--dim);
 }
 
 /* ── 尊重系统的"减少动态效果" ─────────────────────── */

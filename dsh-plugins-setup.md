@@ -10,11 +10,11 @@
 
 | 插件 | 来源 | 状态 | 验证方式 |
 |---|---|---|---|
-| `dsh-tool-cordis` | 官方内置（零下载） | ✅ 已生效 | 本会话已能调用 `cordis_inspect_*` / `cordis_define` / `cordis_run` |
-| 会话全文检索（`session-query-sqlite` 覆盖） | 官方内置 | ✅ 配置已生效 | 合成配置校验通过；重启后用侧边栏搜索验证 |
-| Playwright MCP | GitHub `microsoft/playwright-mcp` | ✅ 已生效 | 真实打开 `https://example.com` 成功，产物落在 Z 盘 |
-| Context7 MCP | GitHub `upstash/context7`（托管端点） | ✅ 已生效 | `mcp__context7__*` 工具已注册，端点实测 HTTP 200 |
-| GitHub MCP | GitHub `github/github-mcp-server`（托管端点） | ✅ 令牌已验证（45 个工具），重启后生效 | 直连端点 `initialize` / `tools/list` 均 HTTP 200 |
+| `dsh-tool-cordis` | 官方内置（零下载） | 已生效 | 本会话已能调用 `cordis_inspect_*` / `cordis_define` / `cordis_run` |
+| 会话全文检索（`session-query-sqlite` 覆盖） | 官方内置 | 配置已生效 | 合成配置校验通过；重启后用侧边栏搜索验证 |
+| Playwright MCP | GitHub `microsoft/playwright-mcp` | 已生效 | 真实打开 `https://example.com` 成功，产物落在 Z 盘 |
+| Context7 MCP | GitHub `upstash/context7`（托管端点） | 已生效 | `mcp__context7__*` 工具已注册，端点实测 HTTP 200 |
+| GitHub MCP | GitHub `github/github-mcp-server`（托管端点） | 令牌已验证（45 个工具），重启后生效 | 直连端点 `initialize` / `tools/list` 均 HTTP 200 |
 
 额外完成：pnpm 12 已装在 Z 盘（`dsh plugin` 需要它），npm 缓存与 DSH 数据根已迁到 Z 盘。
 
@@ -90,7 +90,7 @@ Z:\AgentPlugins\dsh-home\profiles\web\cordis.patch.yml
 - pnpm 12 → `Z:\AgentPlugins\npm-global`（已加入用户 PATH）
 - 用户级环境变量已设：`DSH_HOME`、`npm_config_cache`、`PLAYWRIGHT_BROWSERS_PATH`
 
-**事故：** 清理 C 盘 npm 缓存时，删掉的不只是缓存数据——`profiles\node_modules\*` 是
+**事故：**清理 C 盘 npm 缓存时，删掉的不只是缓存数据——`profiles\node_modules\*` 是
 **链接（ReparsePoint）**，指向 `npm-cache\_npx` 里的真实文件。删缓存连带删掉了这些链接的
 目标，于是 **C 盘数据根变成残缺状态**（只剩 14 个文件 / 1.29 MB 的空壳）。
 
@@ -193,14 +193,14 @@ Z:\AgentPlugins\npm-global\pnpm.cmd --dir Z:\AgentPlugins\dsh-home\profiles\web 
 
 | 检查项 | 结果 |
 |---|---|
-| 运行中 harness 的数据根 | `DSH_HOME=Z:\AgentPlugins\dsh-home` ✅ |
-| npm 缓存 | `Z:\AgentPlugins\npm-cache` ✅ |
-| 插件链接 | 240 / 240 有效，**0 断链** ✅ |
-| 可达文件数 | 3297 目录 / 25399 文件 / 198.9 MB（与迁移前完全一致）✅ |
-| 链接目标 | `Z:\AgentPlugins\npm-cache\_npx\1e7f6d9597241db0\...`（同盘、目标完好）✅ |
-| 关键包可读 | tool-cordis / mcp-client / session-query-sqlite / cordis-host-runner ✅ |
-| 插件已注册 | `mcp__playwright__*` 26 个 + `mcp__context7__*` 2 个 + `cordis_*` 7 个 ✅ |
-| C 盘旧根 | 240 / 240 链接断链 → **已删除** ✅（删前最后同步 exit=0，确认无新写入） |
+| 运行中 harness 的数据根 | `DSH_HOME=Z:\AgentPlugins\dsh-home`  |
+| npm 缓存 | `Z:\AgentPlugins\npm-cache`  |
+| 插件链接 | 240 / 240 有效，**0 断链**|
+| 可达文件数 | 3297 目录 / 25399 文件 / 198.9 MB（与迁移前完全一致） |
+| 链接目标 | `Z:\AgentPlugins\npm-cache\_npx\1e7f6d9597241db0\...`（同盘、目标完好） |
+| 关键包可读 | tool-cordis / mcp-client / session-query-sqlite / cordis-host-runner  |
+| 插件已注册 | `mcp__playwright__*` 26 个 + `mcp__context7__*` 2 个 + `cordis_*` 7 个  |
+| C 盘旧根 | 240 / 240 链接断链 → **已删除**（删前最后同步 exit=0，确认无新写入） |
 | 空间 | C: 剩 10 GB / 200 GB；Z: 剩 138 GB / 1000 GB |
 
 **为什么"文件数"会看起来变少**：`profiles\node_modules\*` 是**目录联接（Junction）**，指向
