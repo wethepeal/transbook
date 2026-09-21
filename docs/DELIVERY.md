@@ -4,7 +4,7 @@
 > 版本：M0–M6 全部完成 ｜ 测试 **285 个全绿** ｜ 最后更新 2026-09-21
 >
 > 本文是**给使用者看的**：怎么装、怎么跑、每个数字怎么复现、出问题怎么查。
-> 开发过程与决策记录在 `PROJECT-MEMORY.md`（§5 决策 D-001…D-055）；技术方案在 `docs/plan.md`。
+> 开发过程与决策记录在 `PROJECT-MEMORY.md`（§5 决策 D-001…D-066）；技术方案在 `docs/plan.md`。
 
 ---
 
@@ -67,9 +67,10 @@ cd Z:\AgentProjectHub\Translation_Engineering
 # ① Python 依赖（会把虚拟环境建在项目内的 .venv）
 uv sync
 
-# ② 配置密钥
-copy .env.example .env
-notepad .env            # 填入 DEEPSEEK_API_KEY=sk-xxxx
+# ② 配置密钥（交互式问一次，写进 .env）
+tp setup
+#   非交互：tp setup --key sk-xxxx ｜ 换密钥：tp setup --force
+#   也可以手工：copy .env.example .env，再用记事本填入 DEEPSEEK_API_KEY=sk-xxxx
 
 # ③ 自检
 .venv\Scripts\tp.exe doctor
@@ -117,7 +118,7 @@ tp serve --root data\work
 
 ## 3. 操作手册 · 命令行
 
-一共 14 条命令。下面按"你会按的顺序"排。
+一共 18 条命令（`tp --help` 可列出全部）。下面按"你会按的顺序"排。
 
 ### 3.1 `tp doctor` —— 环境自检
 
@@ -244,7 +245,14 @@ tp render data/work/我的书 -m zh       --to both      # 纯中文终版
 | `--to epub\|pdf\|both` | 输出格式 |
 | `-o` | 输出目录（默认工作目录） |
 
-输出文件名：`{doc_id}.{mode}.epub` / `{doc_id}.{mode}.pdf`。
+输出文件名用**书名**：`<书名>.<mode>.epub` / `<书名>.<mode>.pdf`（例如
+`Re：ゼロから始める異世界生活 43.zh.epub`）。**不是项目名**——项目名是管理标识，
+产物是给人看的文件，发给别人得能看出是哪本书。
+
+> 书名里的 `:` `?` `*` 等会换成**全角等价字符**（Windows 上合法，且保得住书名原样）；
+> 斜杠直接删；首尾空格与点去掉；超长截断到 80 字符。书名为空时退回项目名，
+> 保证总能得到可用的文件名。实现见 `src/transbook/render/naming.py`。
+
 EPUB 会带封面页（书脊首位 + `cover-image` 声明 + EPUB2 兼容 meta）；PDF 是 A5 单栏、思源宋体正文 / 黑体标题、每章另起、自动目录、页脚页码。
 
 ### 3.9 `tp validate` —— ⑨ EPUB 校验
@@ -343,10 +351,45 @@ tp serve --root data\work --open     # 起好之后自动开浏览器（发布�
 
 | 页面 | 能干什么 |
 |---|---|
-| **项目列表** `#/` | 上传 EPUB/PDF（选引擎、输出模式）；查看已有项目与产物 |
+| **项目列表** `#/` | 上传 EPUB/PDF（选引擎、输出模式）；查看已有项目与产物；**每个项目可删除**；按最近活动排序 |
 | **项目详情** `#/p/<doc>` | 统计看板；一键翻译/摘要/渲染；**实时进度条**；取消作业；下载产物；最近作业 |
 | **段落校对** `#/p/<doc>/review` | 左右对照（左原文只读、右译文可编辑）；搜索/状态过滤/分页；逐段或整页保存；撤销定稿 |
 | **配置** `#/settings` | 填/换 DeepSeek API Key、接口地址、默认模型；查看当前生效的引擎与模型 |
+
+**项目列表的排序**：**最近活动的排最前**，不是按名字。时间取目录里所有文件的最新
+mtime——目录自身的 mtime 只在增删直接子项时更新，改 `translations.db` 的内容并不会
+动它，那样翻译完一本书它也不会往前排。时间戳相同时按名字排，保证刷新时不乱跳。
+
+**状态标签有四档**（按项目的实际阶段给，不是简单的"有/没有"）：
+
+| 标签 | 含义 |
+|---|---|
+| 抽取中 | 已上传，抽取还没跑完 |
+| 已抽取 | 有 IR、还没入库 |
+| 可翻译 | 已入库，可以翻译/渲染 |
+| 已删除 | 内容被清空，只剩标记（见 §4.3） |
+
+**HTTP 接口清单**（17 条；交互式文档在 `http://127.0.0.1:<端口>/docs`）：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/health` | 健康检查 |
+| GET | `/api/config` | 读配置（**机密项只回打码值**，见 §4.1） |
+| PUT | `/api/config` | 改配置（只提交要改的键；空串=清空） |
+| GET | `/api/projects` | 项目列表（按最近活动排序） |
+| POST | `/api/books` | 上传一本书并（可选）直接开跑流水线 |
+| GET | `/api/books/{doc}` | 项目详情（IR 摘要 + 统计） |
+| DELETE | `/api/books/{doc}` | 清空项目内容（见 §4.3；作业在跑时 409） |
+| GET | `/api/books/{doc}/segments` | 段落分页 + 搜索 + 状态过滤 |
+| PATCH | `/api/books/{doc}/segments/{seg}` | 单段保存 / 撤销定稿（`clear: true`） |
+| GET | `/api/books/{doc}/qa` | 译文质检报告 |
+| GET | `/api/books/{doc}/review.tsv` | 导出校对稿 TSV |
+| POST | `/api/books/{doc}/review` | 回灌校对结果 |
+| POST | `/api/books/{doc}/jobs` | 提交作业（extract / import / translate / summarize / render / full） |
+| GET | `/api/jobs` | 作业列表（可按 `doc_id` 过滤） |
+| GET | `/api/jobs/{id}` | 单个作业详情 |
+| DELETE | `/api/jobs/{id}` | 取消作业 |
+| GET | `/api/jobs/{id}/events` | SSE 进度流 |
 
 ### 4.1 配置页（换机器、重新部署后必用）
 
@@ -392,6 +435,34 @@ SHA256 前后一致）；「当前生效」卡片随即显示新模型，证实�
 | 链接强调色 / 卡片 | 7.16:1 | ≥ 4.5 |
 | 按钮文字 / 按钮底 | 7.50:1 | ≥ 4.5 |
 | 状态标签色 / 标签底 | 5.69 ~ 7.86:1 | ≥ 4.5 |
+
+### 4.3 删除项目
+
+列表里每个项目都有「删除」按钮（在「校对」旁边，红色描边表示破坏性）。点了之后
+**原地**换成「确认删除 / 取消」——两步确认，比弹模态框轻，但拦得住手滑。
+
+**删什么、留什么**：
+
+| | |
+|---|---|
+| **删掉** | 源书、`book.ir.json`、`translations.db`、`assets/`、所有成品 |
+| **保留** | 项目行本身（状态变「已删除」）、**任务日志** |
+
+> **任务日志为什么留得住**：它在工作根的 `service.db` 里，本来就不在项目目录下。
+> 所以"保留日志"这条不需要额外做什么，只要别去动那个库。删完进详情页的「作业」
+> 标签，历史记录还在。
+
+**为什么项目行要留着**：目录一删这一行就没了，用户会以为删错了东西。留一个
+`.deleted` 标记，列表里就还能看到「已删除」这个状态。
+
+**已删除的项目**：不再显示「校对」（没内容可校对了）、产物列清空、`tp serve` 里
+点项目名仍能进详情页看作业历史。
+
+**不可恢复**，而且**状态不会自动变回去**：删完再跑渲染也变不回「可翻译」（源书和
+翻译库都没了）。想复活它，**重新上传**一本同名项目的书即可——上传会清掉标记。
+
+**有作业在跑时会被拒绝**（HTTP 409）：边跑边删会把半途的产物又写回来，而且删掉
+`translations.db` 之后作业再往里写就是往一个已经删掉的项目里写。
 
 作业在**独立子进程**里跑：关掉浏览器页面不影响执行，重启服务也不丢进度。
 
@@ -549,7 +620,7 @@ Playwright 真实浏览器实测（43 卷，3349 段）：
 ### 6.9 测试
 
 ```
-312 passed ｜ 0 failed
+335 passed ｜ 0 failed
 ```
 
 覆盖抽取（EPUB/PDF/表格/脚注/注音/页眉页脚）、存储与 TM、翻译编排与护栏、渲染（EPUB/PDF）、QA、审核回流、滚动摘要、引擎对比、服务与 Web、以及**发布形态**（打包相关回归见 §11）。**全部零成本**（用 Fake 引擎与合成夹具，不调用 API）。
@@ -612,29 +683,39 @@ Translation_Engineering/
 │   ├── translate/           # ③ 翻译：base / prompts / deepseek / fake / runner / summary
 │   ├── quality/             # ⑧ 术语抽取、译文 QA、引擎对比
 │   ├── review/              # ⑦ 审核回流（TSV/Markdown 导出与回灌）
-│   ├── render/              # ⑤ 渲染：xhtml / epub / pdf
+│   ├── render/              # ⑤ 渲染：xhtml / epub / pdf / naming.py（产物命名）
 │   ├── service/             # M5/M6 服务层：api / jobs / pipeline / runner
 │   ├── validate.py          # ⑨ EPUB 校验
+│   ├── console.py           # 控制台编码兜底（Windows 重定向下的 GBK/cp1252）
 │   ├── cli.py               # 全部命令
 │   └── textutil.py          # 文本清洗原语（注音/连字/CJK 空格/附页归类）
 ├── web/                     # M6 前端（React + TS + Vite）
-│   ├── src/components/      # 项目列表 / 详情 / 进度 / 上传 / 段落校对
+│   ├── src/components/      # 项目列表 / 详情 / 进度 / 上传 / 段落校对 / 配置 / 404
 │   └── dist/                # 构建产物（gitignore，由 npm run build 生成）
-├── tests/                   # 287 个测试
-├── tools/                   # 辅助脚本
+├── tests/                   # 335 个测试
+├── tools/                   # 辅助脚本与发布工具
+│   ├── build_release.py     #   打发布包（前端 → wheel → Release zip，见 §11）
+│   ├── verify_install.ps1   #   14 项开箱即用检查（UTF-8 with BOM，见 §11.6）
+│   ├── check_secrets.py     #   密钥泄露检查（CI 每次都跑，见 §9）
 │   ├── acceptance_run.py    #   端到端验收（逐阶段计时 + 汇总，见 §6.10）
 │   ├── fetch_epubcheck_lib.py  # 从 Maven Central 装配 epubcheck
 │   ├── golden_diff.py       #   PDF 抽取 vs EPUB 真值比对
 │   └── …                    #   探针与基准（版式/注音/页脚）
+├── packaging/               # 面向非命令行用户的发布素材
+│   ├── start.cmd            #   纯 ASCII 启动器（见 §11.4）
+│   └── README.txt           #   中文使用说明
+├── .github/workflows/       # ci.yml（测试+lint+密钥检查）/ release.yml（打 tag 自动发布）
+├── hatch_build.py           # 把 web/dist 嵌进 wheel 的构建钩子（见 §11.2）
 ├── docs/                    # plan.md（方案）/ m0-report.md / DELIVERY.md（本文）
 ├── data/work/<书>/          # ← 每本书一个工作目录
 │   ├── source.epub          #   输入（Web 上传时保存）
 │   ├── book.ir.json         #   ① 抽取产物（唯一真源）
 │   ├── preview.md           #   ① 人工检查闸门
 │   ├── assets/              #   图片
-│   ├── translations.db      #   ②③④ 段落表 + TM + 摘要 + 任务
-│   └── <doc>.<mode>.{epub,pdf}   # ⑤ 成品
-└── PROJECT-MEMORY.md        # 开发记忆（决策 D-001…D-055）
+│   ├── translations.db      #   ②③④ 段落表 + TM + 摘要
+│   ├── <书名>.<mode>.{epub,pdf}   # ⑤ 成品（用**书名**，不是项目名）
+│   └── .deleted             #   被删除后只剩这个标记（见 §4.3）
+└── PROJECT-MEMORY.md        # 开发记忆（决策 D-001…D-066）
 ```
 
 **`data/` 全部不进版本库**（体积大 / 可再生 / 含第三方版权内容）。
@@ -702,6 +783,8 @@ Translation_Engineering/
 | 症状 | 原因与解法 |
 |---|---|
 | `tp serve` 说「界面未构建」 | 到 `web/` 跑 `npm install && npm run build` |
+| `tp serve` 绑不上端口，报"以一种访问权限不允许的方式做了一个访问套接字的尝试" | **不是权限问题**：端口落在 Windows 的**保留区段**里（Hyper-V / WSL / Docker 会占 8xxx 段）。`tp serve` 会自动往后找并打印换成了哪个口；查保留段：`netsh int ipv4 show excludedportrange protocol=tcp`；也可直接 `tp serve --port 9000` |
+| 传了 `--port` 但还是跑到别的端口 | 同上，说明指定的那个也不可用。看启动时那行黄色提示 |
 | 页面白屏 | 看浏览器 console；多半是构建产物过期，重新 build 并强制刷新 |
 | 作业一直 `running` | 进程被杀了。重启服务时会自动把僵尸作业收尸为 `failed` |
 | 提交后毫无反应 | 看 `GET /api/jobs`；若为 `failed`，`GET /api/jobs/{id}` 的 `message` 里有完整堆栈 |
@@ -895,15 +978,23 @@ tp validate data/work/X                 # ⑨ 校验
 # 跑（界面）
 tp serve --root data/work               # → http://127.0.0.1:8321/
 tp serve --root data/work --open        # 顺便自动开浏览器
-# 界面上「配置」（#/settings）可填/换 API Key，改完立即生效，不用重启
+#   端口被 Windows 保留区段占用时会自动往后找并打印新端口；也可 --port 9000
+# 界面上：
+#   「配置」(#/settings) 填/换 API Key，改完立即生效，不用重启
+#   项目列表按最近活动排序，每行可「删除」清空该项目内容（任务日志保留）
 
 # 审核
 tp export-review data/work/X -f tsv -o r.tsv   # 改译文列
 tp apply-review  data/work/X r.tsv             # 回灌
 tp clear-review  data/work/X                   # 回滚
 
+# 提交前自检（CI 跑的就是这三条）
+uv run pytest -q; uv run ruff check .; python tools/check_secrets.py
+
 # 打包发布
 python tools\build_release.py           # → dist\*.whl + dist\*-win64.zip
 powershell -File tools\verify_install.ps1   # 14 项开箱即用检查
 git tag v0.1.0; git push origin v0.1.0      # CI 自动构建并发布 Release
 ```
+
+> 产物文件名用**书名**（`<书名>.zh.epub`），不是项目名——项目名只是管理标识。

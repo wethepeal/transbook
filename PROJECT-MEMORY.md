@@ -50,16 +50,19 @@
 
 ### 1.2 需求确认状态
 
-- 概要已给出（§1.1）
-- **第一批 6 项重要问题已确认**（2026-09-17）：引擎=DeepSeek API 为主／PDF=文字版为主／仅自用不分发／
-  PDF=重排版／输出=双语+纯中文两版／脚注必留+图片保留+表格 M2
-- **仍有 Q14~Q23 待确认**（本地模型方案、审核方式、样例书、规模、预算、术语资产、版式字体、竖排、插图、git），
-  见 `docs/plan.md` §11.2
-- 全部确认后：本文档升到 §2/§4 定稿、决策追加 §5、本小节记为"需求已确认"
+**✅ 需求已全部确认、方案已定稿**（2026-09-17 起）。§1.1 是用户口述的原始概要，
+后续追加的条目都标了"（追加）"。
+
+- 第一批 6 项：引擎=DeepSeek API 为主／PDF=文字版为主／仅自用不分发／PDF=重排版／
+  输出=双语+纯中文两版／脚注必留+图片保留+表格 M2
+- Q14~Q23（本地模型方案、审核方式、样例书、规模、预算、术语资产、版式字体、竖排、
+  插图、git）**均已确认**，结论落在 `docs/plan.md` v1.0 与本文档 §5 的决策记录里
+- 产品名称定为 **transbook**；仓库 <https://github.com/wethepeal/transbook>
 
 ### 1.3 成功判据
 
-见 `docs/plan.md` §8 各里程碑的验收标准（待 Q14~Q23 确认后固化到本文件）。
+各里程碑的验收标准见 `docs/plan.md` §8；**实际跑出来的数字**见 `docs/DELIVERY.md` §6
+（含 44 卷 EPUB 与竖排 PDF 的端到端回归）。里程碑状态见本文档 §6。
 
 ---
 
@@ -151,9 +154,16 @@ tp setup
 cd web; npm install; npm run build; cd ..
 tp serve --root data/work           # 界面 http://127.0.0.1:8321/ ｜ 接口文档 /docs
 tp serve --root data/work --open    # 顺便自动开浏览器
+#   端口被 Windows 保留区段占用时（Hyper-V/WSL/Docker 会占 8xxx 段）会自动往后找，
+#   并打印换成了哪个口；也可直接 tp serve --port 9000
 
 # 前端开发模式（热更新，不用每次 build）
 cd web; npm run dev                 # http://127.0.0.1:5173，/api 自动代理到 8321
+
+# 提交前自检（CI 跑的就是这三条，任何一条红都不该推）
+uv run pytest -q                    # 335 项
+uv run ruff check .                 # 必须零告警
+python tools/check_secrets.py       # 密钥泄露检查
 
 # 打包发布（M7）：前端会嵌进 wheel，用户装完即有界面、不需要 Node
 python tools/build_release.py       # → dist/*.whl + dist/*-win64.zip
@@ -312,7 +322,7 @@ tests/ ｜ data/（输入书/输出，不入 git）｜ .venv/
 | M2+ PDF 输入路径真跑（真实竖排 PDF 43 → 翻译 → EPUB+PDF 成品） | ✅ 完成：3328 段真译 **¥0.7567**、0 失败；EPUB 14.75 MB / PDF 268 页 15.6 MB，**28/28 图全部被引用** |
 | M3 翻译质量与成本（术语表落地、滚动摘要、本地模型对比） | ✅ **完成**：术语表链路 + **未译重试护栏 + 滚动摘要 + 引擎对比**（D-049/D-052/D-053）。**结论：本地 8B 不作主译**，DeepSeek 单本约 ¥0.7（预算 3%） |
 | M4 输出完善（EPUB3 校验、Typst PDF 排版、审核回流 export/apply-review） | ✅ **完成**：EPUB3 + PDF(Typst) + 审核回流 + **封面页 + epubcheck 校验**（D-050/D-051，4 个成品 epubcheck 0 错 0 警） |
-| M5 服务化（FastAPI + 任务队列 + SSE 进度） | ✅ **完成**：`tp serve` + 13 个 HTTP 路由 + 子进程作业 + SSE；验收三项真机通过（D-054） |
+| M5 服务化（FastAPI + 任务队列 + SSE 进度） | ✅ **完成**：`tp serve` + 子进程作业 + SSE；验收三项真机通过（D-054）。HTTP 路由当时 13 条，**现为 17 条**（后续加了配置读写 2 条、项目删除 1 条、前端托管兜底另计） |
 | M6 Web GUI（项目管理 / 段落级对照校对 / 导出） | ✅ **完成**：React + TS + Vite，`tp serve` 一并托管；真实浏览器验收通过（D-055） |
 | M7 分发与打包（前端进 wheel、一键启动包、CI、上传 GitHub） | ✅ **完成**：`hatch_build.py` + `tools/build_release.py` + `packaging/start.cmd` + GitHub Actions；干净环境实测 **14/14 通过**；已推送到 `wethepeal/transbook`（D-057 / D-058 / D-060） |
 
