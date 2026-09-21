@@ -12,6 +12,7 @@ import json
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,10 @@ from transbook.translate.summary import SummaryReport, generate_summaries
 Progress = Callable[[str, float], None]
 #: 支持的输入扩展名
 SOURCE_EXT = (".epub", ".pdf")
+
+#: 「已删除」标记文件名。删除项目内容后留下它，项目行才会继续出现在列表里、
+#: 显示成「已删除」。任务日志不在这里——它在工作根的 `service.db` 里，动不到。
+DELETED_MARKER = ".deleted"
 DEFAULT_ROOT = Path("data/work")
 
 
@@ -90,8 +95,20 @@ class Project:
         **不看抽取有没有跑完**：上传只写了 `source.epub`，抽取是后台作业；
         如果这里要求已有 IR/db，用户刚建完项目点进去就会看到"项目不存在"——
         这正是实测遇到的弹窗。存在性只看目录里有没有这个项目的文件。
+
+        「已删除」的项目**也算存在**：内容清空了，但那一行要留在列表里，
+        否则用户删完发现项目直接消失了，会怀疑是不是删错了东西。
         """
-        return self.ir_path.is_file() or self.db_path.is_file() or self.source_file() is not None
+        return (self.is_deleted() or self.ir_path.is_file()
+                or self.db_path.is_file() or self.source_file() is not None)
+
+    def is_deleted(self) -> bool:
+        """是否已被清空（只剩 `.deleted` 标记）。"""
+        return self.deleted_marker.is_file()
+
+    @property
+    def deleted_marker(self) -> Path:
+        return self.dir / DELETED_MARKER
 
 
 def project_of(root: Path, doc_id: str) -> Project:
@@ -131,7 +148,79 @@ def store_source(root: Path, doc_id: str, filename: str, data: bytes) -> Project
     proj = project_of(root, doc_id)
     proj.dir.mkdir(parents=True, exist_ok=True)
     (proj.dir / f"source{ext}").write_bytes(data)
+    # 往一个"已删除"的项目里重新上传 = 重新建它。不清标记的话，
+    # 这个项目会永远卡在「已删除」，用户没法复活它。
+    proj.deleted_marker.unlink(missing_ok=True)
     return proj
+
+
+@dataclass
+class DeleteResult:
+    """删除结果，用于给用户一个"删掉了多少"的回执。"""
+
+    files: int = 0
+    bytes: int = 0
+
+    def summary(self) -> str:
+        return f"{self.files} 个文件 / {self.bytes / 1024 / 1024:.1f} MB"
+
+
+def _measure(path: Path) -> tuple[int, int]:
+    """先量再删：删完就没法报"释放了多少空间"了。"""
+    if path.is_file():
+        try:
+            return 1, path.stat().st_size
+        except OSError:
+            return 0, 0
+    files = size = 0
+    try:
+        for p in path.rglob("*"):
+            if p.is_file():
+                files += 1
+                try:
+                    size += p.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return files, size
+
+
+def delete_project(proj: Project) -> DeleteResult:
+    """清空项目下的**所有内容**，只留下目录本身与一个 `.deleted` 标记。
+
+    删的是：源书、`book.ir.json`、`translations.db`、`assets/`、所有成品。
+    **不删的是任务日志**——它在工作根的 `service.db` 里，本来就不在项目目录下，
+    所以"保留日志"这条不需要额外做什么，只需要别去动那个库。
+
+    为什么留目录：项目行要留在列表里显示「已删除」。目录一删这一行就没了，
+    用户会以为删错了东西。
+
+    ⚠ 不可恢复：源书与翻译成果一并清掉。所以调用方必须先让用户确认。
+    """
+    res = DeleteResult()
+    if not proj.dir.is_dir():
+        return res
+
+    for child in proj.dir.iterdir():
+        if child.name == DELETED_MARKER:
+            continue
+        files, size = _measure(child)
+        res.files += files
+        res.bytes += size
+        try:
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink()
+        except OSError:
+            pass
+
+    proj.deleted_marker.write_text(
+        json.dumps({"deleted_at": datetime.now(UTC).isoformat(timespec="seconds")},
+                   ensure_ascii=False),
+        encoding="utf-8")
+    return res
 
 
 # ── 各阶段 ──────────────────────────────────────────────────────────

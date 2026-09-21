@@ -81,7 +81,9 @@ def test_output_stem_truncates_long_titles():
 # ── 新建项目后不应报"项目不存在" ────────────────────────────────────
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch) -> TestClient:
-    monkeypatch.setattr(J, "spawn", lambda db, r, jid: None)
+    # 假 spawn 必须返回一个 pid：`J.submit` 在 pid 为空时会**立刻把作业标成 failed**
+    # （终态），那样"有作业在跑"就永远不成立。返回假 pid 让作业停在 queued。
+    monkeypatch.setattr(J, "spawn", lambda db, r, jid: 4242)
     root = tmp_path / "work"
     root.mkdir()
     return TestClient(create_app(root, web=tmp_path / "no-web"))
@@ -134,6 +136,125 @@ def test_source_file_is_not_listed_as_output(client: TestClient):
 def test_nonexistent_project_still_404(client: TestClient):
     """放宽存在判定之后，真的不存在的项目仍要 404——别把两种情况混成一团。"""
     assert client.get("/api/books/never-existed").status_code == 404
+
+
+# ── 删除项目内容 ────────────────────────────────────────────────────
+def _seed_project(root: Path, doc_id: str, title: str = "我の本") -> P.Project:
+    """造一个"完整"的项目：源书 + IR + db + assets + 一个成品。"""
+    proj = P.project_of(root, doc_id)
+    proj.dir.mkdir(parents=True)
+    proj.assets.mkdir()
+    (proj.assets / "cover.jpg").write_bytes(b"\xff\xd8\xff")
+    (proj.dir / "source.epub").write_bytes(b"PK\x03\x04fake source")
+    ir = make_ir(title=title, doc_id=doc_id)
+    proj.ir_path.write_text(ir.model_dump_json(), encoding="utf-8")
+    conn = connect(proj.db_path)
+    try:
+        import_ir(conn, ir)
+    finally:
+        conn.close()
+    (proj.dir / f"{title}.zh.epub").write_bytes(b"PK\x03\x04fake output")
+    return proj
+
+
+def test_delete_clears_everything_but_keeps_the_row(client: TestClient, tmp_path: Path):
+    """删除 = 清空项目内容，但项目行要留下（否则用户以为删错了东西）。"""
+    root = tmp_path / "work"
+    proj = _seed_project(root, "to-delete")
+    assert client.get("/api/books/to-delete").status_code == 200
+
+    r = client.delete("/api/books/to-delete")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["files"] >= 4
+    assert body["bytes"] > 0
+    assert "MB" in body["summary"]
+
+    # 内容清空
+    assert not proj.ir_path.exists()
+    assert not proj.db_path.exists()
+    assert not proj.source_file()
+    assert not proj.assets.exists()
+    assert list(proj.dir.glob("*.epub")) == []
+    assert proj.is_deleted() is True
+
+    # 但项目行还在，且状态是"已删除"
+    detail = client.get("/api/books/to-delete").json()
+    assert detail["deleted"] is True
+    assert detail["has_ir"] is False and detail["has_db"] is False
+    assert detail["outputs"] == []
+    assert detail["source"] is None
+    assert "to-delete" in [p["doc_id"] for p in client.get("/api/projects").json()]
+
+
+def test_delete_keeps_job_logs(client: TestClient, tmp_path: Path):
+    """任务日志要保留——它在工作根的 service.db 里，不在项目目录下。
+
+    这条是用户明确要求的："保留项目对应的任务日志"。
+    """
+    root = tmp_path / "work"
+    _seed_project(root, "with-logs")
+    r = client.post("/api/books/with-logs/jobs", json={"kind": "extract", "params": {}})
+    assert r.status_code == 201
+    job_id = r.json()["job_id"]
+    # 让作业进入终态，否则删除会因为"还有作业在跑"被拒（那是另一条测试）
+    client.delete(f"/api/jobs/{job_id}")
+
+    assert client.delete("/api/books/with-logs").status_code == 200
+
+    logs = client.get("/api/jobs?doc_id=with-logs").json()
+    assert [j["id"] for j in logs] == [job_id], "删除项目不该动任务日志"
+
+
+def test_delete_refuses_while_a_job_is_running(client: TestClient, tmp_path: Path):
+    """有作业在跑时拒绝删除：边跑边删会把半途的产物又写回来。"""
+    root = tmp_path / "work"
+    _seed_project(root, "busy")
+    client.post("/api/books/busy/jobs", json={"kind": "extract", "params": {}})
+
+    r = client.delete("/api/books/busy")
+    assert r.status_code == 409
+    assert "作业" in r.json()["detail"]
+    # 拒绝之后内容必须一个都没少
+    assert (root / "busy" / "book.ir.json").is_file()
+
+
+def test_delete_is_not_reversible_by_rerunning(client: TestClient, tmp_path: Path):
+    """删完再跑渲染也不会变回"可翻译"——缺了源书和翻译库，跑不起来。
+
+    用户明确要求状态"保持已删除，不自动变回去"。
+    """
+    root = tmp_path / "work"
+    _seed_project(root, "gone")
+    client.delete("/api/books/gone")
+
+    r = client.post("/api/books/gone/jobs", json={"kind": "render", "params": {}})
+    assert r.status_code in (201, 409)  # 提交得出去也没关系
+    body = client.get("/api/books/gone").json()
+    assert body["deleted"] is True
+
+
+def test_reuploading_revives_a_deleted_project(client: TestClient, tmp_path: Path):
+    """往已删除的项目里重新上传 = 重新建它。
+
+    不清标记的话，这个项目会永远卡在「已删除」，用户没法复活它。
+    """
+    root = tmp_path / "work"
+    _seed_project(root, "revive")
+    client.delete("/api/books/revive")
+    assert client.get("/api/books/revive").json()["deleted"] is True
+
+    r = client.post("/api/books",
+                    files={"file": ("t.epub", b"PK\x03\x04fake", "application/epub+zip")},
+                    data={"doc_id": "revive", "translate": "false"})
+    assert r.status_code == 201
+    body = client.get("/api/books/revive").json()
+    assert body["deleted"] is False
+    assert body["source"] == "source.epub"
+
+
+def test_delete_missing_project_is_404(client: TestClient):
+    assert client.delete("/api/books/never-existed").status_code == 404
 
 
 # ── 列表排序：最近活动的在最前 ──────────────────────────────────────

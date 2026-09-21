@@ -534,7 +534,14 @@ button.tiny {
   width: 16%;
 }
 .table-projects col.c-action {
-  width: 96px;
+  width: 150px;
+}
+/* 行内操作（校对 + 删除，以及确认态的两个按钮）成组居中 */
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-1);
 }
 /* 「状态」「操作」两列都是短标签/短按钮，左对齐会在列里显得偏左，
    整列居中——表头与单元格一起居中，两者才对得齐 */
@@ -676,6 +683,12 @@ button.tiny {
   color: var(--err);
   border-color: var(--err-line);
   background: var(--err-soft);
+}
+/* 「已删除」是墓碑状态，不该像出错那样扎眼，低调即可 */
+.pill.deleted {
+  color: var(--dimmer);
+  border-color: var(--line);
+  background: var(--panel-2);
 }
 
 /* ── 进度条 ─────────────────────────────────────────── */

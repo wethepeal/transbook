@@ -10,6 +10,8 @@ export interface Project {
   dir: string
   has_ir: boolean
   has_db: boolean
+  /** 内容已被清空（只剩标记）；**任务日志仍在**，详情页的「作业」还能看 */
+  deleted: boolean
   source: string | null
   outputs: string[]
 }
@@ -154,6 +156,17 @@ export const api = {
   projects: () => req<Project[]>('/api/projects'),
 
   book: (docId: string) => req<BookDetail>(`/api/books/${encodeURIComponent(docId)}`),
+
+  /**
+   * 清空项目内容（源书 / IR / 翻译库 / 产物），**保留项目行与任务日志**。
+   *
+   * 不可恢复，调用前必须让用户确认。作业在跑时后端会 409。
+   */
+  deleteBook: (docId: string) =>
+    req<{ ok: boolean; doc_id: string; files: number; bytes: number; summary: string }>(
+      `/api/books/${encodeURIComponent(docId)}`,
+      { method: 'DELETE' },
+    ),
 
   segments: (docId: string, opts: { offset?: number; limit?: number; q?: string; status?: string } = {}) => {
     const p = new URLSearchParams()

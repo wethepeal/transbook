@@ -247,6 +247,29 @@ def create_app(root: str | Path = P.DEFAULT_ROOT,
             view["stats"] = _db_stats(proj)
         return view
 
+    @app.delete("/api/books/{doc_id}")
+    def delete_book(doc_id: str) -> dict[str, Any]:
+        """清空项目内容（源书 / IR / 翻译库 / 产物），保留项目行与任务日志。
+
+        **不可恢复**，所以前端必须先让用户确认再调。作业在跑时直接 409：
+        边跑边删会把半途的产物又写回来，而且删掉 `translations.db` 之后
+        作业再往里写就是往一个已删的项目里写。
+        """
+        proj = project_or_404(doc_id)
+        c = conn()
+        try:
+            row = c.execute(
+                "SELECT id FROM job WHERE doc_id=? AND status IN ('queued','running') "
+                "ORDER BY created_at DESC LIMIT 1", (doc_id,)).fetchone()
+        finally:
+            c.close()
+        if row:
+            raise HTTPException(409, f"还有作业在跑（{row['id']}），先取消再删除")
+
+        res = P.delete_project(proj)
+        return {"ok": True, "doc_id": doc_id, "files": res.files,
+                "bytes": res.bytes, "summary": res.summary()}
+
     # ── 段落与审核 ──────────────────────────────────────────────────
     @app.get("/api/books/{doc_id}/segments")
     def segments(doc_id: str, status: str | None = None, q: str | None = None,
@@ -558,6 +581,7 @@ def _project_view(p: P.Project) -> dict[str, Any]:
         "dir": str(p.dir),
         "has_ir": p.ir_path.is_file(),
         "has_db": p.db_path.is_file(),
+        "deleted": p.is_deleted(),
         "source": src.name if src else None,
         "outputs": outs,
     }

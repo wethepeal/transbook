@@ -13,6 +13,8 @@ export default function ProjectList({ onError, onNotice }: Props) {
   const [projects, setProjects] = useState<Project[]>([])
   const [watching, setWatching] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  /** 哪一行正处于"确认删除"的第二步 */
+  const [confirming, setConfirming] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -40,6 +42,18 @@ export default function ProjectList({ onError, onNotice }: Props) {
       }
     })
   }, [watching, refresh])
+
+  /** 清空项目内容。**不可恢复**，所以调用方必须先走完两步确认。 */
+  async function doDelete(docId: string) {
+    setConfirming(null)
+    try {
+      const r = await api.deleteBook(docId)
+      onNotice(`已清空项目「${docId}」的内容（${r.summary}），任务日志保留。`)
+      await refresh()
+    } catch (e) {
+      onError(String(e))
+    }
+  }
 
   return (
     <div className="stack">
@@ -104,9 +118,13 @@ export default function ProjectList({ onError, onNotice }: Props) {
                     <a href={`#/p/${encodeURIComponent(p.doc_id)}`}>{p.doc_id}</a>
                   </td>
                   <td className="nowrap">
-                    {/* 三种状态要分开：刚上传、抽取还没跑完的项目既不是
+                    {/* 四种状态要分开：刚上传、抽取还没跑完的项目既不是
                         "可翻译"也不是"已抽取"，原来会被错标成后者 */}
-                    {p.has_db ? (
+                    {p.deleted ? (
+                      <span className="pill deleted" title="内容已清空，任务日志仍在">
+                        已删除
+                      </span>
+                    ) : p.has_db ? (
                       <span className="pill done">可翻译</span>
                     ) : p.has_ir ? (
                       <span className="pill queued">已抽取</span>
@@ -133,13 +151,41 @@ export default function ProjectList({ onError, onNotice }: Props) {
                   </td>
                   <td className="right nowrap">
                     {/* 行内次级操作：用 ghost 而不是实心强调色。
-                        五行实心按钮会糊成一堵蓝墙，把项目名都压没了。 */}
-                    <a
-                      className="btn small ghost"
-                      href={`#/p/${encodeURIComponent(p.doc_id)}/review`}
-                    >
-                      校对
-                    </a>
+                        五行实心按钮会糊成一堵蓝墙，把项目名都压没了。
+                        删除是**不可恢复**的，所以走两步确认：先点「删除」，
+                        按钮原地换成「确认删除 / 取消」——比弹模态框轻，
+                        但同样能拦住手滑。 */}
+                    {confirming === p.doc_id ? (
+                      <span className="row-actions">
+                        <button
+                          className="ghost tiny danger"
+                          onClick={() => void doDelete(p.doc_id)}
+                        >
+                          确认删除
+                        </button>
+                        <button className="ghost tiny" onClick={() => setConfirming(null)}>
+                          取消
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="row-actions">
+                        {!p.deleted && (
+                          <a
+                            className="btn small ghost"
+                            href={`#/p/${encodeURIComponent(p.doc_id)}/review`}
+                          >
+                            校对
+                          </a>
+                        )}
+                        <button
+                          className="ghost tiny danger"
+                          title="清空这个项目的内容（源书、译文、产物）。任务日志会保留。不可恢复。"
+                          onClick={() => setConfirming(p.doc_id)}
+                        >
+                          删除
+                        </button>
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
