@@ -547,14 +547,19 @@ def _job_view(job: dict[str, Any]) -> dict[str, Any]:
 
 def _project_view(p: P.Project) -> dict[str, Any]:
     src = p.source_file()
+    # 输入文件也是 .epub / .pdf，按后缀扫会把它当成产物列出来（实测见到了
+    # "source.epub" 混在下载清单里）。产物一律排除 source.*。
+    outs = sorted(f.name for f in p.dir.iterdir()
+                  if f.is_file()
+                  and f.suffix.lower() in (".epub", ".pdf")
+                  and not f.name.startswith("source."))
     return {
         "doc_id": p.doc_id,
         "dir": str(p.dir),
         "has_ir": p.ir_path.is_file(),
         "has_db": p.db_path.is_file(),
         "source": src.name if src else None,
-        "outputs": sorted(f.name for f in p.dir.glob("*.epub")) +
-                   sorted(f.name for f in p.dir.glob("*.pdf")),
+        "outputs": outs,
     }
 
 

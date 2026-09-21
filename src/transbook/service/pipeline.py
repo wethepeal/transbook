@@ -18,6 +18,7 @@ from typing import Any
 from transbook.ingest import EpubError, PdfError, ingestor_for
 from transbook.ingest.preview import summarize, to_markdown
 from transbook.ir import DocumentIR
+from transbook.render.naming import output_stem
 from transbook.store import connect, import_ir
 from transbook.translate import BookContext, DeepSeekProvider, FakeProvider
 from transbook.translate.deepseek import DEFAULT_BASE_URL
@@ -63,7 +64,13 @@ class Project:
         return None
 
     def exists(self) -> bool:
-        return self.ir_path.is_file() or self.db_path.is_file()
+        """项目是否存在。
+
+        **不看抽取有没有跑完**：上传只写了 `source.epub`，抽取是后台作业；
+        如果这里要求已有 IR/db，用户刚建完项目点进去就会看到"项目不存在"——
+        这正是实测遇到的弹窗。存在性只看目录里有没有这个项目的文件。
+        """
+        return self.ir_path.is_file() or self.db_path.is_file() or self.source_file() is not None
 
 
 def project_of(root: Path, doc_id: str) -> Project:
@@ -71,11 +78,22 @@ def project_of(root: Path, doc_id: str) -> Project:
 
 
 def list_projects(root: Path) -> list[Project]:
+    """列出工作根下的所有项目。
+
+    用 `exists()` 而不是"有没有 book.ir.json"：刚上传、抽取还没跑完的项目
+    也应该出现在列表里，否则用户上传完在首页看不到自己刚建的项目。
+    """
     base = Path(root)
     if not base.is_dir():
         return []
-    return [Project(d.name, d) for d in sorted(base.iterdir())
-            if d.is_dir() and (d / "book.ir.json").is_file()]
+    out: list[Project] = []
+    for d in sorted(base.iterdir()):
+        if not d.is_dir():
+            continue
+        proj = Project(d.name, d)
+        if proj.exists():
+            out.append(proj)
+    return out
 
 
 def store_source(root: Path, doc_id: str, filename: str, data: bytes) -> Project:
@@ -282,7 +300,8 @@ def run_render(proj: Project, *, mode: str = "bilingual", to: str = "epub",
     if "epub" in wants:
         chapters = build_chapters(ir, translations, mode=mode)
         nav = build_nav(chapters)
-        path = dest / f"{ir.doc.id}.{mode}.epub"
+        # 产物用**书名**命名，不用项目名：项目名是管理标识，产物是给人看的
+        path = dest / f"{output_stem(ir)}.{mode}.epub"
         write_epub(path, title=ir.doc.title, author=ir.doc.author, language="zh",
                    chapters=chapters, css=CSS, nav=nav, images_dir=proj.assets,
                    cover_image=ir.cover_image(),
@@ -290,7 +309,8 @@ def run_render(proj: Project, *, mode: str = "bilingual", to: str = "epub",
         res.files.append(path)
         res.chapters = len(chapters)
     if "pdf" in wants:
-        out = render_pdf(proj.dir, ir, translations, mode=mode)
+        out = render_pdf(proj.dir, ir, translations, mode=mode,
+                         name=f"{output_stem(ir)}.{mode}.typ")
         if out.error or out.pdf_path is None:
             res.error = out.error or "PDF 渲染失败"
         else:

@@ -444,7 +444,7 @@ def render(
 ) -> None:
     """⑥ 渲染：IR + 译文 → EPUB / PDF（双语对照 / 纯中文）。"""
     from transbook.ir import DocumentIR
-    from transbook.render import CSS, build_chapters, build_nav, render_pdf, write_epub
+    from transbook.render import CSS, build_chapters, build_nav, output_stem, render_pdf, write_epub
     from transbook.store import connect
 
     if mode not in ("bilingual", "zh"):
@@ -484,7 +484,8 @@ def render(
     if "epub" in wants:
         chapters = build_chapters(ir, translations, mode=mode)
         nav = build_nav(chapters)
-        epub_path = dest / f"{ir.doc.id}.{mode}.epub"
+        # 产物用**书名**命名，不用项目名（项目名是管理标识，产物是给人看的）
+        epub_path = dest / f"{output_stem(ir)}.{mode}.epub"
         cover = ir.cover_image()
         write_epub(epub_path, title=ir.doc.title, author=ir.doc.author, language="zh",
                    chapters=chapters, css=CSS, nav=nav,
@@ -495,7 +496,8 @@ def render(
                       f"｜ {len(chapters)} 章 ｜ {epub_path.stat().st_size / 1024 / 1024:.2f} MB{tip}")
 
     if "pdf" in wants:
-        res = render_pdf(work, ir, translations, mode=mode)
+        res = render_pdf(work, ir, translations, mode=mode,
+                         name=f"{output_stem(ir)}.{mode}.typ")
         if res.error or res.pdf_path is None:
             console.print(f"[red]✗ PDF 渲染失败：{res.error}[/red]")
             console.print(f"  Typst 源码已生成，可人工检查：{res.typ_path}")
@@ -845,6 +847,24 @@ def setup(
     console.print(f"[green]已写入[/green] {written}")
 
 
+def _port_available(host: str, port: int) -> bool:
+    """能不能在这个地址上监听。
+
+    比"起服务然后看报错"更好：Windows 上除了"端口被占用"，端口还可能落在
+    **系统保留区段**里（Hyper-V / WSL / Docker 会动态占用 8xxx 段）。那时 bind
+    报的是一句语焉不详的"以一种访问权限不允许的方式做了一个访问套接字的尝试"，
+    用户看了也不知道怎么办。事先探一下就能自动让开。
+    """
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
 def _open_browser_soon(url: str, delay: float = 1.5) -> None:
     """延迟一会儿再开浏览器。
 
@@ -877,6 +897,22 @@ def serve(
 
     root = root if root.is_absolute() else (Path.cwd() / root)
     root.mkdir(parents=True, exist_ok=True)
+
+    # 端口探测：Windows 上除了"被占用"，端口还可能落在**系统保留区段**里
+    # （Hyper-V / WSL / Docker 动态占用 8xxx 段）。那种情况下 uvicorn 报的是
+    # "以一种访问权限不允许的方式做了一个访问套接字的尝试"——用户看了也不知道
+    # 该怎么办。所以先探，能自动让开就让开。
+    # 实测本机保留段包含 8163-8262 与 8263-8362，默认的 8321 正好落在里面，
+    # 所以搜索范围要够宽（保留段本身可能就有 100 个端口宽）。
+    if not _port_available(host, port):
+        found = next((c for c in range(port + 1, port + 101) if _port_available(host, c)), None)
+        if found is None:
+            console.print(f"[red]端口 {port}~{port + 100} 都不可用。"
+                          f"换一个：tp serve --port 9000[/red]")
+            raise typer.Exit(2)
+        console.print(f"[yellow]端口 {port} 不可用，自动改用 {found}[/yellow]")
+        port = found
+
     app = create_app(root)
     web = getattr(app.state, "web_dir", None)
     console.print(f"[green]transbook 服务[/green] http://{host}:{port}")

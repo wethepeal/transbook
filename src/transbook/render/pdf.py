@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from transbook.ir import DocumentIR
+from transbook.render.naming import output_stem
 
 # Typst 标记里的特殊字符，需反斜杠转义
 _SPECIAL = "\\#$*_`@<>[]~"
@@ -181,7 +182,7 @@ def write_typst(work_dir: str | Path, ir: DocumentIR, translations: dict[str, st
     """把 Typst 源码写到工作目录（图片按相对路径 `assets/` 引用）。"""
     work = Path(work_dir)
     src, chapters, paragraphs, images = build_typst(ir, translations, mode=mode)
-    typ_path = work / (name or f"{ir.doc.id}.{mode}.typ")
+    typ_path = work / (name or f"{output_stem(ir)}.{mode}.typ")
     typ_path.write_text(src, encoding="utf-8")
     tables, footnotes = _count_extras(ir)
     return PdfResult(typ_path=typ_path, pdf_path=None, chapters=chapters,
@@ -205,9 +206,9 @@ def compile_pdf(typ_path: str | Path, pdf_path: str | Path | None = None) -> Pdf
 
 
 def render_pdf(work_dir: str | Path, ir: DocumentIR, translations: dict[str, str], *,
-               mode: str = "zh") -> PdfResult:
+               mode: str = "zh", name: str | None = None) -> PdfResult:
     """一步到位：写 .typ 并编译成 PDF。"""
-    res = write_typst(work_dir, ir, translations, mode=mode)
+    res = write_typst(work_dir, ir, translations, mode=mode, name=name)
     compiled = compile_pdf(res.typ_path)
     compiled.chapters, compiled.paragraphs, compiled.images = res.chapters, res.paragraphs, res.images
     compiled.tables, compiled.footnotes = res.tables, res.footnotes

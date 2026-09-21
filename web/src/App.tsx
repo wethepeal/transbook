@@ -49,12 +49,21 @@ export function href(route: Route): string {
 export default function App() {
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash))
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash(location.hash))
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
+
+  // 成功提示几秒后自己消失；错误留着等用户处理完再关。
+  // 建完项目**必须给个成功反馈**：以前上传后直接跳走，成没成功只能自己猜。
+  useEffect(() => {
+    if (!notice) return
+    const t = setTimeout(() => setNotice(''), 6000)
+    return () => clearTimeout(t)
+  }, [notice])
 
   const inProject = route.name === 'detail' || route.name === 'review'
 
@@ -121,8 +130,18 @@ export default function App() {
         </div>
       )}
 
+      {/* role="status" 而不是 alert：成功提示不该打断屏幕阅读器正在读的内容 */}
+      {notice && (
+        <div className="banner ok" role="status">
+          <span className="banner-text">{notice}</span>
+          <button className="dismiss" onClick={() => setNotice('')} aria-label="关闭提示">
+            ×
+          </button>
+        </div>
+      )}
+
       <main id="main" tabIndex={-1}>
-        {route.name === 'list' && <ProjectList onError={setError} />}
+        {route.name === 'list' && <ProjectList onError={setError} onNotice={setNotice} />}
         {route.name === 'settings' && <Settings onError={setError} />}
         {route.name === 'detail' && <ProjectDetail docId={route.docId} onError={setError} />}
         {route.name === 'review' && <SegmentEditor docId={route.docId} onError={setError} />}

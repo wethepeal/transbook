@@ -5,9 +5,11 @@ import UploadForm from './UploadForm'
 
 interface Props {
   onError: (msg: string) => void
+  /** 成功提示（会自动消失）：建完项目要给用户一个明确的反馈 */
+  onNotice: (msg: string) => void
 }
 
-export default function ProjectList({ onError }: Props) {
+export default function ProjectList({ onError, onNotice }: Props) {
   const [projects, setProjects] = useState<Project[]>([])
   const [watching, setWatching] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -43,8 +45,11 @@ export default function ProjectList({ onError }: Props) {
     <div className="stack">
       <UploadForm
         onError={onError}
-        onUploaded={(docId, jobId) => {
+        onUploaded={(docId, jobId, filename) => {
           setWatching(jobId)
+          // 创建成功要**明说**。以前上传后直接跳走，成没成功只能靠猜——
+          // 而抽取还没跑完时详情页又会报"项目不存在"，看起来就像建失败了。
+          onNotice(`项目「${docId}」创建成功，正在后台抽取 ${filename}…`)
           void refresh()
           location.hash = `#/p/${encodeURIComponent(docId)}`
         }}
@@ -99,9 +104,15 @@ export default function ProjectList({ onError }: Props) {
                     <a href={`#/p/${encodeURIComponent(p.doc_id)}`}>{p.doc_id}</a>
                   </td>
                   <td className="nowrap">
-                    <span className={p.has_db ? 'pill done' : 'pill queued'}>
-                      {p.has_db ? '可翻译' : '仅抽取'}
-                    </span>
+                    {/* 三种状态要分开：刚上传、抽取还没跑完的项目既不是
+                        "可翻译"也不是"已抽取"，原来会被错标成后者 */}
+                    {p.has_db ? (
+                      <span className="pill done">可翻译</span>
+                    ) : p.has_ir ? (
+                      <span className="pill queued">已抽取</span>
+                    ) : (
+                      <span className="pill running">抽取中</span>
+                    )}
                   </td>
                   <td className="mono small nowrap">{p.source ?? '—'}</td>
                   {/* 产物做成小标签：文件名很长，直接拼成一行会把整列撑开、

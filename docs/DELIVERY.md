@@ -329,6 +329,18 @@ tp serve --root data\work            # 界面 http://127.0.0.1:8321/ ｜ 接口�
 tp serve --root data\work --open     # 起好之后自动开浏览器（发布包的 start.cmd 用这个）
 ```
 
+> **端口被系统保留时**：Windows 会把一些 TCP 区段**保留**给 Hyper-V / WSL / Docker，
+> 落在里面的端口连 `bind` 都不允许，报错是"以一种访问权限不允许的方式做了一个
+> 访问套接字的尝试"——看着像权限问题，其实是端口被系统占着了。查保留区段：
+>
+> ```powershell
+> netsh int ipv4 show excludedportrange protocol=tcp
+> ```
+>
+> `tp serve` 会**先探测再启动**，默认端口不可用时自动往后找（实测本机保留了
+> `8163-8262` 与 `8263-8362`，默认的 8321 正好落在里面，服务自动让到了 8365）。
+> 也可以直接指定：`tp serve --port 9000`。
+
 | 页面 | 能干什么 |
 |---|---|
 | **项目列表** `#/` | 上传 EPUB/PDF（选引擎、输出模式）；查看已有项目与产物 |

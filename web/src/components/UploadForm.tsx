@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 import { api } from '../api'
 
 interface Props {
-  onUploaded: (docId: string, jobId: string) => void
+  onUploaded: (docId: string, jobId: string, filename: string) => void
   onError: (msg: string) => void
 }
 
@@ -27,7 +27,7 @@ export default function UploadForm({ onUploaded, onError }: Props) {
         to: 'both',
         translate: 'true',
       })
-      onUploaded(r.doc_id, r.job_id)
+      onUploaded(r.doc_id, r.job_id, file.name)
       setFile(null)
       setDocId('')
       if (inputRef.current) inputRef.current.value = ''
